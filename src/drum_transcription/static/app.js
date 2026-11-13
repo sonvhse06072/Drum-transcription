@@ -56,7 +56,7 @@ function updateRunState() {
   $("demo-button").disabled = busy || !state.health;
   $("rescore-button").disabled = busy || state.job?.status !== "completed";
   const canEditBars = !busy && state.job?.status === "completed" && state.rhythmBars.length > 0;
-  for (const id of ["bar-edit-apply", "bar-edit-reset", "rhythm-rescore-button"]) $(id).disabled = !canEditBars;
+  for (const id of ["bar-edit-apply", "bar-edit-reset", "rhythm-rescore-button", "barlines-submit"]) $(id).disabled = !canEditBars;
 }
 
 function populateMeterChoices() {
@@ -241,6 +241,8 @@ function renderBarMap(job, rhythm) {
     $("bar-edit-meter").value = bars[0]?.meter || "4/4";
     $("bar-edit-grouping").value = bars[0]?.grouping?.join("+") || "";
     $("rhythm-rescore-grid").value = resolvedScoreOptions(job, rhythm).subdivisions ?? 4;
+    $("barlines-seconds").value = bars.length ? [...bars.map((bar) => Number(bar.start_seconds).toFixed(3)), Number(bars.at(-1).end_seconds).toFixed(3)].join("; ") : "";
+    $("barlines-meters").value = bars.map((bar) => bar.meter).join("; ");
     showBarError(""); renderPendingBars();
   }
   $("bar-edit-start").max = bars.length; $("bar-edit-end").max = bars.length;
@@ -558,6 +560,33 @@ $("rhythm-rescore-form").addEventListener("submit", async (event) => {
   state.submitting = true; updateRunState();
   try {
     selectJob(await api(`/api/jobs/${encodeURIComponent(state.job.id)}/rhythm-rescore`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(options) }));
+    loadHistory();
+  } catch (error) { showBarError(error.message); }
+  finally { state.submitting = false; updateRunState(); }
+});
+
+$("barline-rescore-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!state.job || !state.rhythmBars.length) return;
+  showError(""); showBarError("");
+  const rawTimes = $("barlines-seconds").value.split(";").map((part) => part.trim()).filter(Boolean);
+  const barline_seconds = rawTimes.map(Number);
+  const barline_meters = $("barlines-meters").value.split(";").map((part) => part.trim()).filter(Boolean);
+  if (rawTimes.some((part) => !/^(?:\\d+(?:\\.\\d+)?|\\.\\d+)$/.test(part)) ||
+      barline_seconds.some((value) => !Number.isFinite(value) || value < 0) ||
+      barline_seconds.length !== barline_meters.length + 1 || barline_meters.length < 1) {
+    showBarError("Cần N+1 mốc giây hợp lệ cho N số chỉ nhịp, ngăn bằng dấu chấm phẩy."); return;
+  }
+  const options = {
+    title: state.job.options?.title || "Drum transcription",
+    subdivisions: Number($("rhythm-rescore-grid").value),
+    barline_seconds, barline_meters,
+  };
+  state.submitting = true; updateRunState();
+  try {
+    selectJob(await api(`/api/jobs/${encodeURIComponent(state.job.id)}/rhythm-rescore`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(options),
+    }));
     loadHistory();
   } catch (error) { showBarError(error.message); }
   finally { state.submitting = false; updateRunState(); }

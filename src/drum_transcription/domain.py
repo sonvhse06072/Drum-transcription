@@ -66,12 +66,29 @@ class RhythmRescoreOptions(BaseModel):
     title: str = Field(default="Drum transcription", min_length=1, max_length=120)
     subdivisions: Literal[1, 2, 3, 4, 6, 8] = 4
     bar_overrides: list[BarOverride] = Field(default_factory=list, max_length=4096)
+    barline_seconds: list[float] | None = Field(default=None, max_length=1025)
+    barline_meters: list[str] | None = Field(default=None, max_length=1024)
 
     @model_validator(mode="after")
     def unique_bars(self) -> "RhythmRescoreOptions":
         indices = [item.bar_index for item in self.bar_overrides]
         if len(indices) != len(set(indices)):
             raise ValueError("Mỗi ô nhịp chỉ được xuất hiện một lần trong phần chỉnh sửa.")
+        boundary_mode = self.barline_seconds is not None or self.barline_meters is not None
+        if boundary_mode:
+            boundaries = self.barline_seconds
+            meters = self.barline_meters
+            if boundaries is None or meters is None or len(boundaries) != len(meters) + 1:
+                raise ValueError("Cần N+1 mốc ranh giới cho N ô nhịp và số chỉ nhịp.")
+            if len(meters) < 1 or self.bar_overrides:
+                raise ValueError("Không trộn chỉnh ranh giới với chỉnh nhãn ô hiện có.")
+            if any(not math.isfinite(value) or value < 0 for value in boundaries):
+                raise ValueError("Các mốc ô nhịp phải là số giây không âm và hữu hạn.")
+            if any(b - a < 0.05 for a, b in zip(boundaries, boundaries[1:])):
+                raise ValueError("Các mốc đầu ô phải tăng dần và cách nhau ít nhất 50 ms.")
+            import re
+            if any(re.fullmatch(METER_PATTERN, signature) is None for signature in meters):
+                raise ValueError("Số chỉ nhịp của từng ô không hợp lệ.")
         return self
 
 

@@ -87,7 +87,7 @@ drum-transcription setup-models beat_this</code></pre><p>Chỉ bước cài đ�
                 <p class="field-help">Thời gian tính từ đầu clip. Ô 1 bắt đầu tại phách 1 nhận diện đầu tiên; phần lấy đà đứng trước ô này. ♩ / phút là tempo trung bình trong từng ô. Số chỉ nhịp và cách nhóm phách do máy gợi ý cần được nghe đối chiếu.</p>
                 <div class="table-wrap bar-map-scroll"><table><thead><tr><th scope="col">Ô</th><th scope="col">Khoảng thời gian</th><th scope="col">Số chỉ nhịp</th><th scope="col">Nhóm phách</th><th scope="col">♩ / phút</th><th scope="col">Nguồn</th></tr></thead><tbody id="bar-map-body"></tbody></table></div>
                 <details class="bar-editor">
-                  <summary>Chỉnh số chỉ nhịp theo ô, giữ các mốc phách</summary>
+                  <summary>Chỉnh số chỉ nhịp và ranh giới ô nhịp</summary>
                   <p class="field-help">Chọn một ô hoặc nhiều ô liên tiếp, nhập số chỉ nhịp và cách nhóm như 2+2+3 cho 7/8. Số chỉ nhịp mới chia lại độ dài âm nhạc trong ô; nhóm phách đổi cách nối móc trên sheet. Bản mới dùng lại các cú đánh và mốc thời gian đã dò, không chạy lại AI và không thêm hoặc xoá phách 1.</p>
                   <form id="rhythm-rescore-form">
                     <div class="field-grid"><div class="field"><label for="bar-edit-start">Từ ô</label><input id="bar-edit-start" type="number" min="1" step="1" value="1" required></div><div class="field"><label for="bar-edit-end">Đến ô</label><input id="bar-edit-end" type="number" min="1" step="1" value="1" required></div></div>
@@ -98,6 +98,15 @@ drum-transcription setup-models beat_this</code></pre><p>Chỉ bước cài đ�
                     <div class="field"><label for="rhythm-rescore-grid">Lưới ký âm</label><select id="rhythm-rescore-grid"><option value="1">1/4</option><option value="2">1/8</option><option value="4" selected>1/16</option><option value="8">1/32</option><option value="3">1/8 triplet</option><option value="6">1/16 triplet</option></select></div>
                     <button id="rhythm-rescore-button" class="button button-secondary" type="submit">Xuất sheet với bản đồ nhịp này</button>
                   </form>
+                  <details class="advanced">
+                    <summary>Sửa ranh giới ô nhịp bị AI phát hiện sai</summary>
+                    <p class="field-help">Chỉ dùng khi bản đồ phía trên chia ô sai. Nhập toàn bộ ranh giới từ đầu ô thứ nhất đến cuối ô cuối, tính bằng giây trong clip (dùng dấu chấm thập phân), và số chỉ nhịp cho mỗi ô. Có N+1 mốc cho N số chỉ nhịp. Đây là bước hiệu chỉnh thủ công, không phải kết quả AI.</p>
+                    <form id="barline-rescore-form">
+                      <div class="field"><label for="barlines-seconds">Mốc ranh giới (giây, phân cách bằng dấu chấm phẩy)</label><textarea id="barlines-seconds" rows="3" placeholder="0.371; 2.371; 3.871; 5.121"></textarea></div>
+                      <div class="field"><label for="barlines-meters">Số chỉ nhịp từng ô (phân cách bằng dấu chấm phẩy)</label><textarea id="barlines-meters" rows="2" placeholder="4/4; 3/4; 5/8"></textarea></div>
+                      <button class="button button-secondary" id="barlines-submit" type="submit">Xuất sheet từ ranh giới đã sửa</button>
+                    </form>
+                  </details>
                 </details>
               </div>
             </section>

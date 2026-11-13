@@ -8,12 +8,128 @@ import numpy as np
 from .domain import RhythmAnalysis, RhythmBar, RhythmRescoreOptions
 
 
+def apply_explicit_barlines(
+    analysis: RhythmAnalysis, options: RhythmRescoreOptions
+) -> RhythmAnalysis:
+    """Apply user-specified bar *times* and signatures, preserving raw AI output.
+
+    This is a manual review revision, NOT improved automatic recognition. The
+    source track/DrumHit timestamps and original model events are never altered.
+    """
+    from .rhythm import _default_grouping
+
+    boundaries = options.barline_seconds
+    meters = options.barline_meters
+    if boundaries is None or meters is None:
+        raise ValueError("Thiếu mốc ô hoặc chuỗi số chỉ nhịp.")
+    times = list(analysis.beats_seconds)
+    if boundaries[0] >= times[-1] or boundaries[-1] < times[-1] - 0.05:
+        raise ValueError(
+            "Bản đồ mới phải bắt đầu trong clip và kết thúc sau beat cuối phát hiện. "
+            "Kiểm tra các mốc trong clip, không dùng thời gian của file nhạc gốc."
+        )
+    if boundaries[-1] > analysis.bars[-1].end_seconds + 5 if analysis.bars else False:
+        raise ValueError("Ranh giới cuối nằm quá xa vùng audio đã phân tích.")
+
+    # A boundary can be between detected beats (e.g. 5/16). Nearby model
+    # markers within 25 ms are replaced, not doubled into implausible tiny beats.
+    for boundary in boundaries:
+        times = [value for value in times if abs(value - boundary) > 0.025]
+        times.append(boundary)
+    times.sort()
+    if any(b - a <= 1e-6 for a, b in zip(times, times[1:])):
+        raise ValueError("Ranh giới trùng nhau sau khi căn thời gian.")
+
+    bar_lengths = []
+    starts = [0.0]
+    bars = []
+    for index, signature in enumerate(meters):
+        numerator, denominator = map(int, signature.split("/"))
+        length = numerator * 4 / denominator
+        bar_lengths.append(length)
+        bars.append(
+            RhythmBar(
+                start_seconds=boundaries[index],
+                end_seconds=boundaries[index + 1],
+                start_quarter=starts[-1],
+                end_quarter=starts[-1] + length,
+                meter=signature,
+                grouping=_default_grouping(signature),
+                source="user_boundary",
+                estimated=False,
+            )
+        )
+        starts.append(starts[-1] + length)
+
+    def at_time(when: float) -> float:
+        if when < boundaries[0]:
+            return (when - boundaries[0]) * bar_lengths[0] / (
+                boundaries[1] - boundaries[0]
+            )
+        if when >= boundaries[-1]:
+            return starts[-1] + (when - boundaries[-1]) * bar_lengths[-1] / (
+                boundaries[-1] - boundaries[-2]
+            )
+        index = min(bisect_right(boundaries, when) - 1, len(meters) - 1)
+        fraction = (when - boundaries[index]) / (
+            boundaries[index + 1] - boundaries[index]
+        )
+        return starts[index] + fraction * bar_lengths[index]
+
+    positions = [at_time(when) for when in times]
+    intervals = [
+        (right - left) / (positions[i + 1] - positions[i])
+        for i, (left, right) in enumerate(zip(times, times[1:]))
+    ]
+    bpm = 60 / median(intervals)
+    if not 20 <= bpm <= 400:
+        raise ValueError("BPM suy ra từ các mốc chỉnh nằm ngoài 20–400.")
+    inherited_warnings = analysis.metadata.get("detector_warnings", analysis.warnings)
+    warning = (
+        "Ranh giới và số chỉ nhịp đã được người dùng nhập để hiệu chỉnh; "
+        "đây không phải các ô nhịp AI tự nhận diện chính xác. "
+        "Dữ liệu beat/downbeat gốc được lưu riêng."
+    )
+    history = list(analysis.metadata.get("boundary_edit_history", []))
+    history.append({"barline_seconds": boundaries, "barline_meters": meters})
+    return RhythmAnalysis.model_validate(
+        {
+            **analysis.model_dump(),
+            "bpm": bpm,
+            "meter": meters[0],
+            "first_downbeat_seconds": boundaries[0],
+            "beats_seconds": times,
+            "downbeats_seconds": boundaries[:-1],
+            "beat_positions_quarters": positions,
+            "beat_unit_quarters": bar_lengths[0] / (
+                (boundaries[1] - boundaries[0])
+                / median([b - a for a, b in zip(times, times[1:])])
+            ),
+            "bars": [bar.model_dump() for bar in bars],
+            "warnings": list(dict.fromkeys([warning, *inherited_warnings])),
+            "metadata": {
+                **analysis.metadata,
+                "meter_source": "user_barline_review",
+                "bar_boundaries_edited": True,
+                "boundary_edit_history": history,
+                "model_downbeats_before_user_review": analysis.downbeats_seconds,
+                "detector_warnings": inherited_warnings,
+                "bar_map_requires_review": False,
+                "rhythm_review_status": "user_corrected_not_model_verified",
+                "confidence_kind": "user_supplied_timing_not_model_probability",
+            },
+        }
+    )
+
+
 def apply_bar_overrides(analysis: RhythmAnalysis, options: RhythmRescoreOptions) -> RhythmAnalysis:
     """Keep bar/beat times; rescale musical positions where meter length changes.
 
     Grouping controls engraving. It does not move beat/downbeat detections or
     pretend to repair a missing/spurious downbeat marker.
     """
+    if options.barline_seconds is not None:
+        return apply_explicit_barlines(analysis, options)
     if not analysis.bars:
         raise ValueError(
             "Kết quả này chưa có bản đồ ô nhịp. Chạy lại nhận diện với phiên bản mới trước khi chỉnh từng ô."
