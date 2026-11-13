@@ -16,11 +16,14 @@ cd Drum-transcription
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
+python -m pip install 'torch==2.8.0' 'torchaudio==2.8.0' --index-url https://download.pytorch.org/whl/cpu
 python -m pip install -e '.[adtof]'
 drum-transcription setup-models adtof
 drum-transcription doctor
 drum-transcription serve
 ```
+
+Lệnh trên chọn **CPU** để bắt đầu kiểm chứng với môi trường đã chạy thử. Nếu dùng NVIDIA GPU, thay dòng cài Torch/TorchAudio bằng cặp CUDA phù hợp ở mục dưới trước khi cài extra.
 
 Mở **http://127.0.0.1:8765**. Lần đầu nên dùng clip **30–60 giây**, xác nhận BPM, số chỉ nhịp và thời điểm phách đầu trong clip. BPM trong app luôn là số **nốt đen/phút**, kể cả 6/8.
 
