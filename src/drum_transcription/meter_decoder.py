@@ -24,6 +24,10 @@ class DecodeResult:
 def _beat_scores(beats: Sequence[float], logits: Sequence[float], fps: int) -> list[float]:
     if fps <= 0 or len(logits) < 2:
         raise ValueError("Invalid downbeat frame evidence.")
+    # Reject corrupted model evidence before max-pooling: Python's max() can
+    # silently choose a finite neighbor over NaN in the local frame window.
+    if not all(isfinite(float(value)) for value in logits):
+        raise ValueError("Downbeat frame evidence contains NaN/Inf.")
     scores: list[float] = []
     for when in beats:
         frame = max(0, min(len(logits) - 1, int(floor(when * fps + 0.5))))
