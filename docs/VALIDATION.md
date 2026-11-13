@@ -16,7 +16,9 @@ Chọn ba đoạn 30–60 giây mà bạn có quyền sử dụng:
 | Fill | Nhiều tom/cymbal, chuyển đoạn | Nhầm tom, crash/ride, lỗi ranh giới đoạn |
 | Chi tiết khó | Ghost, hi-hat mở, nhiều cú đánh cùng lúc | Chi tiết model hỗ trợ và chi tiết bị gộp hoặc mất |
 
-Với mỗi clip, chạy cùng BPM, meter, grid và phách đầu. Thử audio mix trực tiếp và drum stem nếu có. Tách nguồn có thể làm mất transient/ghost note; không mặc định stem luôn tốt hơn.
+Với mỗi clip, thử **nhận diện nhịp tự động** trước và nghe bản có click để kiểm tra tempo/phách 1. Khi so sánh engine nhận diện trống, dùng cùng kết quả nhịp hoặc cùng cấu hình ghi đè thủ công để tránh trộn hai loại sai số. Thử audio mix trực tiếp và drum stem nếu có. Tách nguồn có thể làm mất transient/ghost note; không mặc định stem luôn tốt hơn.
+
+Thêm các ca lệch đầu đoạn: im lặng 1,5 giây trước groove, cắt ở mốc 1,5 giây trong file, và clip bắt đầu giữa ô nhịp có vài cú đánh trước phách 1. Kiểm tra mốc clip và mốc file tải lên, giữ số giây lẻ, đồng thời đảm bảo phần lấy đà vẫn có trên sheet. Beat This! không đồng nghĩa cú đánh đầu tiên là phách 1.
 
 ADTOF chỉ có 5 nhóm: không chấm phân biệt tom/hi-hat/crash–ride như thể model hỗ trợ chúng. ADT_STR có nhiều nhãn hơn nhưng vẫn cần nghe/chấm lại; số lớp không phải accuracy.
 
@@ -26,7 +28,7 @@ ADTOF chỉ có 5 nhóm: không chấm phân biệt tom/hi-hat/crash–ride như
 |---|---|
 | Clip / job ID | Tên, vị trí cắt, độ dài |
 | Model | Engine, revision/checkpoint, threshold/device |
-| Nhịp | BPM, meter, grid, first downbeat |
+| Nhịp | Auto/manual, BPM, meter, grid, first downbeat trong clip và file tải lên |
 | Lỗi hit | Thiếu, thừa, nhầm loại theo từng nhạc cụ |
 | Lỗi nhịp | Onset sai, ô nhịp sai, chùm ba/swing sai |
 | Chi tiết | Kỹ thuật đúng, sai, model không hỗ trợ |

@@ -12,6 +12,7 @@ const instruments = {
 const fileLabels = {
   musicxml: ["MusicXML · mở trong MuseScore", true], pdf: ["PDF", false],
   raw_midi: ["MIDI gốc", false], score_midi: ["MIDI theo sheet", false], events: ["Cú đánh · JSON", false],
+  rhythm: ["Beat / phách 1 · JSON", false],
 };
 
 function textElement(tag, text, className) {
@@ -47,9 +48,30 @@ function chosenEngine() {
 
 function updateRunState() {
   const busy = state.submitting || ["running", "queued"].includes(state.job?.status);
-  $("run-button").disabled = busy || !state.file || !chosenEngine()?.ready || !state.health?.ffmpeg;
+  const timingReady = $("rhythm-mode").value === "manual" || state.health?.rhythm?.ready;
+  $("run-button").disabled = busy || !state.file || !chosenEngine()?.ready || !state.health?.ffmpeg || !timingReady;
   $("demo-button").disabled = busy || !state.health;
   $("rescore-button").disabled = busy || state.job?.status !== "completed";
+}
+
+function renderTimingMode() {
+  const manual = $("rhythm-mode").value === "manual";
+  $("manual-timing-fields").hidden = !manual;
+  $("auto-timing-help").hidden = manual;
+  for (const id of ["bpm", "downbeat"]) {
+    $(id).disabled = !manual;
+    $(id).required = manual;
+  }
+  $("meter").required = manual;
+  $("meter-hint").textContent = manual ? "bắt buộc" : "tuỳ chọn";
+  $("auto-meter-option").textContent = manual ? "Chọn số chỉ nhịp" : "Tự nhận diện";
+  $("meter-help").hidden = manual;
+  const missing = !manual && state.health && !state.health.rhythm?.ready;
+  $("rhythm-alert").hidden = !missing;
+  $("rhythm-alert").textContent = missing
+    ? "Chưa có model nhận diện nhịp. Chuẩn bị Beat This! trong mục “Kiểm tra môi trường local”, rồi bấm “Kiểm tra lại”. Tempo và phách 1 sẽ được dò từ audio khi model sẵn sàng."
+    : "";
+  updateRunState();
 }
 
 function renderEngine() {
@@ -75,6 +97,7 @@ async function loadHealth() {
     $("version").textContent = state.health.version ? `v${state.health.version}` : "";
     const checks = [["FFmpeg", state.health.ffmpeg, "Sẵn sàng", "Chưa tìm thấy"], ["MuseScore / PDF", state.health.musescore, "Sẵn sàng", "Chưa cấu hình · vẫn xuất XML"]];
     for (const engine of state.health.engines || []) checks.push([engine.label || engine.id, engine.ready, "Sẵn sàng", "Chưa sẵn sàng"]);
+    checks.push(["Beat This! / tempo & phách 1", state.health.rhythm?.ready, "Sẵn sàng", "Chưa chuẩn bị"]);
     if (state.health.separation) {
       checks.push(["Demucs / tách trống", state.health.separation.ready, "Sẵn sàng", "Chưa chuẩn bị"]);
       $("separate-drums").disabled = !state.health.separation.ready;
@@ -86,13 +109,15 @@ async function loadHealth() {
       row.append(textElement("span", name), textElement("span", ready ? yes : no, `check-state ${ready ? "ready" : "missing"}`));
       return row;
     }));
-    if (!state.health.ffmpeg) $("setup-help").open = true;
+    if (!state.health.ffmpeg || !state.health.rhythm?.ready) $("setup-help").open = true;
+    renderTimingMode();
     renderEngine();
   } catch (error) {
     state.health = null;
     $("server-status").textContent = "Chưa kết nối được máy chủ local";
     $("server-dot").className = "status-dot error";
     $("engine-description").textContent = "Khởi động ứng dụng theo README rồi kiểm tra lại kết nối.";
+    renderTimingMode();
     updateRunState();
     showError(error.message || "Không kết nối được máy chủ.");
   }
@@ -107,13 +132,56 @@ function selectFile(file) {
 }
 
 function formOptions() {
+  const manual = $("rhythm-mode").value === "manual";
   return {
     title: $("title").value.trim() || "Drum transcription", engine: $("engine").value,
-    bpm: Number($("bpm").value), meter: $("meter").value, subdivisions: Number($("subdivisions").value),
-    first_downbeat_seconds: Number($("downbeat").value), device: $("device").value,
+    rhythm_mode: manual ? "manual" : "auto",
+    bpm: manual ? Number($("bpm").value) : null, meter: $("meter").value || null, subdivisions: Number($("subdivisions").value),
+    first_downbeat_seconds: manual ? Number($("downbeat").value) : null, device: $("device").value,
     threshold: Number($("threshold").value), clip_start_seconds: Number($("clip-start").value),
     clip_duration_seconds: Number($("clip-duration").value), separate_drums: $("separate-drums").checked,
   };
+}
+
+function automaticTiming(job) {
+  return job.kind !== "demo" && job.options?.rhythm_mode === "auto";
+}
+
+function resolvedScoreOptions(job, rhythm = job.rhythm) {
+  const input = job.options || {};
+  const resolved = job.resolved_score_options || {};
+  const fallback = automaticTiming(job) ? (rhythm || {}) : input;
+  return {
+    title: resolved.title ?? input.title,
+    bpm: resolved.bpm ?? fallback.bpm,
+    meter: resolved.meter ?? fallback.meter,
+    subdivisions: resolved.subdivisions ?? input.subdivisions,
+    first_downbeat_seconds: resolved.first_downbeat_seconds ?? fallback.first_downbeat_seconds,
+  };
+}
+
+function formatSeconds(value) {
+  return value == null || !Number.isFinite(Number(value)) ? "—" : `${Number(value).toLocaleString("vi-VN", { minimumFractionDigits: 3, maximumFractionDigits: 3 })} s`;
+}
+
+function renderRhythm(job, eventRhythm) {
+  const rhythm = job.rhythm || eventRhythm;
+  const options = resolvedScoreOptions(job, rhythm);
+  const auto = automaticTiming(job);
+  const demo = job.kind === "demo";
+  const downbeat = options.first_downbeat_seconds ?? job.metrics?.first_downbeat_seconds;
+  const original = demo ? null : (job.metrics?.first_downbeat_original_seconds ?? (downbeat == null ? null : Number(downbeat) + Number(job.options?.clip_start_seconds ?? 0)));
+  $("rhythm-result").hidden = false;
+  $("rhythm-source").textContent = demo ? "Dữ liệu mẫu" : auto ? "Tự nhận diện" : job.options?.rhythm_mode === "manual" ? "Nhập thủ công" : "Thông số đã lưu";
+  $("detected-bpm").textContent = options.bpm == null ? "—" : Number(options.bpm).toLocaleString("vi-VN", { maximumFractionDigits: 2 });
+  $("detected-meter").textContent = options.meter || "—";
+  $("detected-downbeat").textContent = formatSeconds(downbeat);
+  $("original-downbeat").textContent = demo ? "Không có file gốc" : formatSeconds(original);
+  $("rhythm-result-note").textContent = demo
+    ? "Các mốc nhịp của mẫu được định nghĩa sẵn để kiểm tra ký âm."
+    : auto
+      ? "BPM là ước lượng từ các beat nhận diện. Mốc phách 1 giữ phần lẻ của giây; mốc trong file gốc bằng điểm cắt cộng mốc trong clip. Nghe bản phách tự động để kiểm tra và xem các lưu ý bên dưới."
+      : "Sheet dùng tempo và phách đầu đã nhập. Mốc trong file gốc bằng điểm cắt cộng mốc trong clip; timing cú đánh gốc vẫn được giữ.";
 }
 
 function safeFileUrl(value, jobId) {
@@ -149,7 +217,7 @@ function renderOutputs(job) {
     link.append(textElement("span", "↓"), document.createTextNode(label)); links.push(link);
   }
   $("downloads").replaceChildren(...links);
-  const audioLabels = [["source_audio", "01 · Đoạn audio gốc"], ["drums_audio", "02 · Stem trống"], ["preview_audio", "03 · Cú đánh phát lại"]];
+  const audioLabels = [["source_audio", "Audio gốc"], ["beat_preview", "Audio + phách tự động"], ["drums_audio", "Stem trống"], ["preview_audio", "Cú đánh phát lại"]];
   const audioCards = [];
   for (const [key, label] of audioLabels) {
     const url = safeFileUrl(files[key], job.id);
@@ -161,6 +229,7 @@ function renderOutputs(job) {
   }
   $("audio-players").replaceChildren(...audioCards);
   $("audio-note").hidden = !safeFileUrl(files.preview_audio, job.id);
+  $("beat-audio-note").hidden = !safeFileUrl(files.beat_preview, job.id);
   const pdfUrl = safeFileUrl(files.pdf, job.id);
   $("pdf-panel").hidden = !pdfUrl;
   if (pdfUrl) $("pdf-preview").src = `${pdfUrl}#view=FitH`;
@@ -177,8 +246,8 @@ function renderMetrics(job, events) {
   $("metrics").replaceChildren(
     metric(hitCount == null ? "—" : hitCount.toLocaleString("vi-VN"), "Cú đánh gốc"),
     metric(seconds == null ? "—" : `${Number(seconds).toFixed(1)} s`, "Độ dài đoạn"),
-    metric(job.options?.bpm ?? "—", "Tempo đã xác nhận"),
-    metric(elapsed == null ? (job.options?.meter || "—") : `${Number(elapsed).toFixed(1)} s`, elapsed == null ? "Số chỉ nhịp" : "Thời gian xử lý"),
+    metric(m.bars == null ? "—" : Number(m.bars).toLocaleString("vi-VN"), "Ô nhịp trên sheet"),
+    metric(elapsed == null ? "—" : `${Number(elapsed).toFixed(1)} s`, "Thời gian xử lý"),
   );
 }
 
@@ -203,7 +272,8 @@ async function loadEvents(job, generation) {
       const row = document.createElement("tr"); const cell = textElement("td", "Không có cú đánh được nhận diện trong đoạn này."); cell.colSpan = 4; row.append(cell); $("events-body").append(row);
     }
     renderMetrics(job, events);
-    setWarnings([...(job.warnings || []), ...(events.warnings || [])]);
+    renderRhythm(job, events.rhythm);
+    setWarnings([...(job.warnings || []), ...(events.warnings || []), ...(automaticTiming(job) ? (job.rhythm?.warnings || events.rhythm?.warnings || []) : [])]);
     if (events.engine === "demo" || events.engine === "synthetic") $("demo-notice").hidden = false;
   } catch (error) {
     if (generation !== state.generation) return;
@@ -231,12 +301,12 @@ function renderJob(job) {
     $("job-progress").hidden = true;
     const demo = job.kind === "demo" || job.engine === "demo" || job.options?.engine === "demo" || job.is_demo;
     $("demo-notice").hidden = !demo;
-    const options = job.options || {};
-    $("rescore-bpm").value = options.bpm || 120;
-    $("rescore-meter").value = options.meter || "4/4";
-    $("rescore-grid").value = options.subdivisions || 4;
-    $("rescore-downbeat").value = options.first_downbeat_seconds || 0;
-    renderMetrics(job); renderOutputs(job); setWarnings(job.warnings);
+    const options = resolvedScoreOptions(job);
+    $("rescore-bpm").value = options.bpm ?? "";
+    $("rescore-meter").value = options.meter ?? "";
+    $("rescore-grid").value = options.subdivisions ?? 4;
+    $("rescore-downbeat").value = options.first_downbeat_seconds ?? "";
+    renderMetrics(job); renderRhythm(job); renderOutputs(job); setWarnings(job.warnings);
     $("events-body").replaceChildren(); $("instrument-counts").replaceChildren(); $("event-count").textContent = "Đang tải…";
     loadEvents(job, state.generation);
     announce("Đã tạo xong kết quả. Có thể nghe đối chiếu và tải bản nhạc.");
@@ -293,7 +363,7 @@ $("transcribe-form").addEventListener("submit", async (event) => {
   event.preventDefault(); showError("");
   if (!state.file) { showError("Hãy chọn một file nhạc."); return; }
   const options = formOptions();
-  if (options.first_downbeat_seconds >= options.clip_duration_seconds) { showError("Phách 1 phải nằm bên trong đoạn nhạc đã chọn."); $("downbeat").focus(); return; }
+  if (options.rhythm_mode === "manual" && options.first_downbeat_seconds >= options.clip_duration_seconds) { showError("Phách 1 phải nằm bên trong đoạn nhạc đã chọn."); $("downbeat").focus(); return; }
   state.submitting = true; updateRunState();
   try {
     const form = new FormData(); form.append("file", state.file); form.append("options", JSON.stringify(options));
@@ -320,6 +390,7 @@ $("rescore-form").addEventListener("submit", async (event) => {
 
 $("audio-file").addEventListener("change", (event) => selectFile(event.target.files[0]));
 $("engine").addEventListener("change", renderEngine);
+$("rhythm-mode").addEventListener("change", renderTimingMode);
 $("refresh-health").addEventListener("click", () => { showError(""); loadHealth(); });
 $("refresh-jobs").addEventListener("click", loadHistory);
 for (const type of ["dragenter", "dragover"]) $("drop-zone").addEventListener(type, (event) => { event.preventDefault(); $("drop-zone").classList.add("dragover"); });
@@ -329,4 +400,5 @@ $("drop-zone").addEventListener("drop", (event) => {
   if (file) { $("audio-file").files = event.dataTransfer.files; selectFile(file); }
 });
 
+renderTimingMode();
 Promise.allSettled([loadHealth(), loadHistory()]);

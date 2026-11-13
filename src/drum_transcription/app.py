@@ -60,6 +60,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/health")
     def health():
         from .engines import get_engine_status
+        from .rhythm import rhythm_status
 
         return {
             "version": __version__,
@@ -68,6 +69,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "ffmpeg": settings.ffmpeg is not None,
             "musescore": settings.musescore is not None,
             "separation": separation_status(settings.models_dir),
+            "rhythm": rhythm_status(settings.models_dir),
         }
 
     @app.get("/api/jobs")
@@ -84,6 +86,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/jobs", status_code=202)
     async def create_job(request: Request, file: UploadFile = File(...), options: str = Form(...)):
         from .engines import get_engine_status
+        from .rhythm import rhythm_status
 
         try:
             parsed = JobOptions.model_validate_json(options)
@@ -102,6 +105,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if not status or not status["ready"]:
             raise HTTPException(409, status["detail"] if status else "Model chưa sẵn sàng.")
+        if parsed.rhythm_mode == "auto":
+            rhythm = rhythm_status(settings.models_dir)
+            if not rhythm["ready"]:
+                raise HTTPException(409, rhythm["detail"])
         if settings.ffmpeg is None:
             raise HTTPException(409, "Cần cài FFmpeg trước khi xử lý audio.")
         if parsed.separate_drums and not separation_status(settings.models_dir)["ready"]:
@@ -137,7 +144,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         manager: JobManager = request.app.state.jobs
         try:
             job = manager.create(
-                JobOptions(title="Demo ký âm • 4 ô nhịp", bpm=120, clip_duration_seconds=8),
+                JobOptions(
+                    title="Demo ký âm • 4 ô nhịp",
+                    rhythm_mode="manual",
+                    bpm=120,
+                    meter="4/4",
+                    first_downbeat_seconds=0,
+                    clip_duration_seconds=8,
+                ),
                 kind="demo",
             )
         except ValueError as exc:

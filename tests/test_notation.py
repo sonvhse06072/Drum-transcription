@@ -6,7 +6,7 @@ import mido
 import pytest
 import soundfile as sf
 
-from drum_transcription.domain import DrumHit, ScoreOptions, Transcription
+from drum_transcription.domain import DrumHit, RhythmAnalysis, ScoreOptions, Transcription
 from drum_transcription.notation import INSTRUMENTS, _build_score, _quantize, export_score
 
 
@@ -39,12 +39,13 @@ def test_original_timing_survives_quantization_and_collision(tmp_path, monkeypat
     score = _midi_onsets(tmp_path / result["files"]["score_midi"])
     assert [p for p, _, _ in raw] == [36, 38, 38, 46]
     assert [t for _, t, _ in raw] == pytest.approx([0.1, 0.507, 0.531, 0.76], abs=0.001)
-    assert [(p, v) for p, _, v in score] == [(38, 110), (46, 70)]
-    assert [t for _, t, _ in score] == pytest.approx([0, 0.25], abs=0.001)
+    assert [(p, v) for p, _, v in score] == [(36, 90), (38, 110), (46, 70)]
+    assert [t for _, t, _ in score] == pytest.approx([0.125, 0.5, 0.75], abs=0.001)
     assert result["metrics"]["grid_collisions"] == 1
     assert result["metrics"]["hits_before_downbeat"] == 1
     assert any("collapsed" in warning for warning in result["warnings"])
-    assert any("Pickup" in warning for warning in result["warnings"])
+    assert result["metrics"]["pickup_quarters"] == 1
+    assert any("retained" in warning for warning in result["warnings"])
     preview, sr = sf.read(tmp_path / result["files"]["preview_audio"])
     assert sr == 22050
     assert len(preview) >= 2 * sr
@@ -159,3 +160,140 @@ def test_failed_musescore_does_not_advertise_pdf(tmp_path, monkeypatch):
     assert "pdf" not in result["files"]
     assert (tmp_path / result["files"]["musicxml"]).is_file()
     assert any("PDF export failed" in warning for warning in result["warnings"])
+
+
+def _rhythm(beats: list[float], first_downbeat_index: int = 0, bpm: float = 120) -> RhythmAnalysis:
+    return RhythmAnalysis(
+        bpm=bpm, meter="4/4", first_downbeat_seconds=beats[first_downbeat_index],
+        beats_seconds=beats, downbeats_seconds=beats[first_downbeat_index::4],
+        beat_positions_quarters=[float(index - first_downbeat_index) for index in range(len(beats))],
+    )
+
+
+def test_fractional_downbeat_preserves_pickup_in_xml_and_both_midis(tmp_path, monkeypatch):
+    monkeypatch.setattr("drum_transcription.notation.find_musescore", lambda configured: None)
+    original = Transcription(
+        engine="fixture", duration_seconds=3.5,
+        hits=[DrumHit(time_seconds=value, instrument="snare", velocity=90) for value in (0, 0.5, 1, 1.5, 2)],
+    )
+    snapshot = original.model_dump_json()
+    options = ScoreOptions(first_downbeat_seconds=1.5)
+    rhythm = _rhythm([index * 0.5 for index in range(8)], 3)
+    result = export_score(original, options, tmp_path, rhythm=rhythm)
+    assert original.model_dump_json() == snapshot
+    assert result["metrics"]["score_hit_count"] == 5
+    assert result["metrics"]["pickup_quarters"] == 3
+    assert result["metrics"]["score_origin_quarter"] == -3
+    assert result["metrics"]["detected_downbeat_measure"] == 1
+    xml = ET.parse(tmp_path / result["files"]["musicxml"])
+    measures = xml.findall("./part/measure")
+    assert measures[0].get("implicit") == "yes"
+    assert measures[0].get("number") == "0"
+    assert measures[1].get("number") == "1"
+    assert len(measures[0].findall("./note/unpitched")) == 3
+    assert len(xml.findall("./part/measure/note/unpitched")) == 5
+    divisions = int(xml.findtext(".//divisions"))
+    for voice in ("1", "2"):
+        duration = sum(int(item.findtext("duration")) for item in measures[0].findall(f"note[voice='{voice}']") if item.find("chord") is None)
+        assert duration == 3 * divisions
+    # A simple pickup must not acquire accidental tuplets or fragmented dotted rests.
+    assert measures[0].find(".//time-modification") is None
+    foot_rests = measures[0].findall("note[voice='2']")
+    assert [item.findtext("type") for item in foot_rests] == ["quarter"] * 3
+    assert [when for _, when, _ in _midi_onsets(tmp_path / "raw.mid")] == pytest.approx([0, 0.5, 1, 1.5, 2], abs=0.001)
+    assert [when for _, when, _ in _midi_onsets(tmp_path / "score.mid")] == pytest.approx([0, 0.5, 1, 1.5, 2], abs=0.001)
+
+
+def test_silence_and_fractional_clip_offset_do_not_become_a_pickup(tmp_path, monkeypatch):
+    monkeypatch.setattr("drum_transcription.notation.find_musescore", lambda configured: None)
+    original = Transcription(
+        engine="fixture", duration_seconds=3.37,
+        metadata={"clip_start_seconds": 1.5},
+        hits=[DrumHit(time_seconds=value, instrument="kick", velocity=90) for value in (0.37, 0.87, 1.37)],
+    )
+    rhythm = _rhythm([0.37 + index * 0.5 for index in range(7)])
+    result = export_score(original, ScoreOptions(first_downbeat_seconds=0.37), tmp_path, rhythm=rhythm)
+    assert result["metrics"]["pickup_quarters"] == 0
+    assert result["metrics"]["score_origin_quarter"] == 0
+    assert result["metrics"]["first_downbeat_seconds"] == 0.37
+    assert ET.parse(tmp_path / "score.musicxml").find("./part/measure").get("implicit") == "no"
+    assert [when for _, when, _ in _midi_onsets(tmp_path / "raw.mid")] == pytest.approx([0.37, 0.87, 1.37], abs=0.001)
+    assert [when for _, when, _ in _midi_onsets(tmp_path / "score.mid")] == pytest.approx([0, 0.5, 1], abs=0.001)
+    assert original.metadata == {"clip_start_seconds": 1.5}
+
+
+def test_detected_grid_tracks_unequal_intervals_and_score_playback_is_nominal(tmp_path, monkeypatch):
+    monkeypatch.setattr("drum_transcription.notation.find_musescore", lambda configured: None)
+    beats = [0.37, 0.87, 1.47, 2.17, 2.97]
+    rhythm = _rhythm(beats)
+    original = Transcription(engine="fixture", duration_seconds=3.4, hits=[DrumHit(time_seconds=value, instrument="snare", velocity=85) for value in beats])
+    options = ScoreOptions(first_downbeat_seconds=0.37)
+    detected, _, metrics = _quantize(original, options, rhythm)
+    constant, _, _ = _quantize(original, options)
+    assert [event.quarter for event in detected] == list(map(Fraction, range(5)))
+    assert [event.quarter for event in constant] != [event.quarter for event in detected]
+    assert metrics["max_quantization_error_ms"] == 0
+    result = export_score(original, options, tmp_path, rhythm=rhythm)
+    assert result["metrics"]["tempo_mode"] == "detected_beat_grid_nominal_playback"
+    assert [when for _, when, _ in _midi_onsets(tmp_path / "raw.mid")] == pytest.approx(beats, abs=0.001)
+    assert [when for _, when, _ in _midi_onsets(tmp_path / "score.mid")] == pytest.approx([0, 0.5, 1, 1.5, 2], abs=0.001)
+
+
+def test_time_shifted_audio_produces_identical_score_positions():
+    baseline = [index * 0.5 for index in range(9)]
+    shifted = [value + 1.537 for value in baseline]
+    positions = []
+    for values in (baseline, shifted):
+        original = Transcription(engine="fixture", duration_seconds=values[-1] + 0.3, hits=[DrumHit(time_seconds=value, instrument="snare") for value in values])
+        rhythm = _rhythm(values, first_downbeat_index=3)
+        options = ScoreOptions(first_downbeat_seconds=values[3])
+        events, _, _ = _quantize(original, options, rhythm)
+        positions.append([event.quarter for event in events])
+    assert positions[0] == positions[1] == list(map(Fraction, range(-3, 6)))
+
+
+def test_edge_extrapolation_keeps_prebeat_hits_and_warns(tmp_path, monkeypatch):
+    monkeypatch.setattr("drum_transcription.notation.find_musescore", lambda configured: None)
+    rhythm = _rhythm([0.37 + index * 0.5 for index in range(7)], first_downbeat_index=2)
+    original = Transcription(engine="fixture", duration_seconds=4, hits=[
+        DrumHit(time_seconds=0.12, instrument="snare"),
+        DrumHit(time_seconds=1.37, instrument="kick"),
+        DrumHit(time_seconds=3.62, instrument="snare"),
+    ])
+    options = ScoreOptions(first_downbeat_seconds=1.37)
+    events, _, _ = _quantize(original, options, rhythm)
+    assert [event.quarter for event in events] == [Fraction(-5, 2), Fraction(0), Fraction(9, 2)]
+    result = export_score(original, options, tmp_path, rhythm=rhythm)
+    assert result["metrics"]["score_hit_count"] == 3
+    assert any("extrapolated" in warning for warning in result["warnings"])
+    assert [when for _, when, _ in _midi_onsets(tmp_path / "score.mid")] == pytest.approx([0.25, 1.5, 3.75], abs=0.001)
+
+
+def test_multiple_preceding_measures_are_preserved(tmp_path, monkeypatch):
+    monkeypatch.setattr("drum_transcription.notation.find_musescore", lambda configured: None)
+    original = Transcription(engine="fixture", duration_seconds=6, hits=[DrumHit(time_seconds=value, instrument="kick") for value in (0, 0.5, 2.5, 4.5)])
+    options = ScoreOptions(first_downbeat_seconds=4.5)
+    events, _, _ = _quantize(original, options)
+    score, _, _ = _build_score(original, options, events)
+    lengths = [tuple(Fraction(voice.highestTime) for voice in measure.voices) for measure in score.parts[0].getElementsByClass("Measure")]
+    assert lengths == [(Fraction(1), Fraction(1))] + [(Fraction(4), Fraction(4))] * 3
+    result = export_score(original, options, tmp_path)
+    assert result["metrics"]["preceding_measures"] == 3
+    assert result["metrics"]["detected_downbeat_measure"] == 3
+    assert result["metrics"]["score_hit_count"] == 4
+    assert any("more than one preceding measure" in warning for warning in result["warnings"])
+
+
+def test_compound_meter_pickup_keeps_two_balanced_voices(tmp_path, monkeypatch):
+    monkeypatch.setattr("drum_transcription.notation.find_musescore", lambda configured: None)
+    original = Transcription(engine="fixture", duration_seconds=2, hits=[DrumHit(time_seconds=value, instrument="snare") for value in (0, 0.25, 0.5, 0.75)])
+    options = ScoreOptions(meter="6/8", first_downbeat_seconds=0.75)
+    result = export_score(original, options, tmp_path)
+    assert result["metrics"]["pickup_quarters"] == 1.5
+    xml = ET.parse(tmp_path / "score.musicxml")
+    pickup = xml.find("./part/measure")
+    foot_rests = pickup.findall("note[voice='2']")
+    assert len(foot_rests) == 1
+    assert foot_rests[0].findtext("type") == "quarter"
+    assert foot_rests[0].find("dot") is not None
+    assert len(xml.findall("./part/measure/note/unpitched")) == 4

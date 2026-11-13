@@ -4,6 +4,12 @@ The web app never installs packages, downloads weights, uploads audio or calls a
 inference API. Download dependencies/models explicitly during installation, then
 disconnect the network and run a short clip to verify the local environment.
 
+Since v0.2, normal transcription also uses **Beat This!** for automatic tempo and
+downbeats. Install the `beat` extra and run `drum-transcription setup-models
+beat_this` once. See [automatic rhythm detection](RHYTHM.md) for the pinned code,
+checkpoint, timing semantics and limitations. Missing rhythm weights never cause
+a fallback to 120 BPM or a zero downbeat.
+
 `ready` in the UI means required files and Python modules are present. It does not
 mean the engine has passed an inference test, nor does it measure transcription
 accuracy. Missing weights fail the job; there is no random-model or cloud fallback.
@@ -15,8 +21,9 @@ Install a PyTorch build appropriate for CPU/CUDA first if you want to choose its
 download size/device support. Then:
 
 ```bash
-python -m pip install -e '.[adtof]'
+python -m pip install -e '.[adtof,beat]'
 drum-transcription setup-models adtof --models-dir ./models
+drum-transcription setup-models beat_this --models-dir ./models
 ```
 
 The dependency is pinned to
@@ -54,8 +61,9 @@ This engine is heavier. Start with a 10–30-second clip, especially on CPU:
 ```bash
 # CPU only: install matching CPU builds before the extra.
 python -m pip install 'torch==2.8.0' 'torchaudio==2.8.0' --index-url https://download.pytorch.org/whl/cpu
-python -m pip install -e '.[adt-str]'
+python -m pip install -e '.[adt-str,beat]'
 drum-transcription setup-models adt_str --models-dir ./models
+drum-transcription setup-models beat_this --models-dir ./models
 ```
 
 For NVIDIA GPU use matching Torch/TorchAudio 2.8.0 CUDA builds instead of the CPU

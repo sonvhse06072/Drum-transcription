@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "drum-transcription"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local audio-to-drum-sheet prototype with editable MusicXML"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -20,6 +20,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+beat = [
+  "torch==2.8.0", "torchaudio==2.8.0",
+  "beat-this @ git+https://github.com/CPJKU/beat_this.git@b95c8ab0c58c2d9fcfd40508ae8dffbc05ac4f5c",
+]
 adtof = [
   "torch==2.8.0",
   "adtof-pytorch @ git+https://github.com/xavriley/ADTOF-pytorch.git@85c192e78f716ea0b111cc8a5ee4a8f6a3a4f8a9",

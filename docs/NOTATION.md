@@ -8,15 +8,31 @@ is used at run time.
 
 ## What is musical input, and what is inferred?
 
-- BPM, meter, subdivision and first downbeat are user-confirmed inputs.
+- Automatic jobs use locally detected beat/downbeat times and estimated tempo.
+  A resolved meter and selected subdivision determine engraving. Manual timing
+  remains an optional override; it is not required for the normal upload flow.
 - BPM always counts **quarter notes**, including in 6/8, 9/8 and 12/8. A dotted
   quarter pulse of 80 in 6/8 therefore means quarter-note BPM 120 here.
-- The first-downbeat field is relative to the **selected audio clip**, not the
-  whole uploaded song. Score bar 1 starts at that anchor.
-- Events before the anchor remain in raw JSON and raw MIDI. They are omitted from
-  the score with a warning; pickup measures are not implemented yet.
-- The score uses a constant tempo. Tempo maps, swing interpretation, automatic
-  meter changes, sticking and inferred flam/drag notation are future work.
+- The first downbeat is relative to the **selected audio clip**, not the whole
+  uploaded song. A clip cut at original-file time 1.5 seconds may have its first
+  detected downbeat at 0.37 seconds in the clip. Those timestamps stay separate;
+  the exporter never rounds either to an integer second or adds the file offset
+  to clip-local event times.
+- For automatic jobs, piecewise interpolation between detected beats maps each
+  event time to its musical position. Unequal detected beat intervals therefore
+  do not accumulate the error of one global BPM grid. The nearest beat interval
+  is extrapolated to clip edges, with a warning for hits outside the detected range.
+- Events before the first downbeat are retained in a pickup or preceding
+  measures. A pickup begins at the beat boundary at/before its first quantized
+  event, with rests as needed, and is encoded as an implicit measure 0. If the
+  first known downbeat occurs after several measures, those earlier measures
+  remain present and the result reports which measure contains the anchor.
+  Leading silence with no earlier hits does not create a silent pickup.
+- The printed tempo and `score.mid` playback use the nominal estimated (or
+  manually selected) **constant** BPM. Beat-grid engraving is not a full playback
+  tempo map. Raw MIDI/audio keep performance timing. Swing interpretation,
+  automatic meter changes, sticking and inferred flam/drag notation remain
+  future work.
 - Durations in the sheet describe rhythm on the selected grid. They do not claim
   to measure how long a drum or cymbal physically rings.
 - Raw events are never modified by quantization. Same-instrument events that
@@ -31,8 +47,10 @@ is used at run time.
 ## Staff convention
 
 The sheet has a five-line percussion staff. Hand parts use voice 1, stems up;
-bass drum and pedal hi-hat use voice 2, stems down. Every voice fills its measure
-with exact rational durations and rests. Beam grouping follows the supplied time
+bass drum and pedal hi-hat use voice 2, stems down. Both voices fill every full
+measure, or the same shortened pickup, with exact rational durations and rests.
+Beat-aligned rest grouping avoids filling pickups with arbitrary small fragments.
+Beam grouping follows the supplied time
 signature. Grids of three or six subdivisions per quarter produce tuplets.
 
 The display coordinates below describe placement relative to a treble staff;
@@ -63,8 +81,12 @@ conga, timbale or bongo has been distinguished.
 
 `raw.mid` retains original event times relative to the clip start. Its explicit
 tempo meta-event simply provides a MIDI timebase; setting it does not turn raw
-timestamps into score quantization. `score.mid` begins at score bar 1 and uses the
-chosen grid. Both use the General MIDI drum channel (zero-based channel 9).
+timestamps into score quantization. `score.mid` begins at the start of the written
+score, including a pickup when present, and uses the chosen grid at nominal BPM.
+The detected downbeat can therefore occur after time zero in score MIDI. Result
+metrics include `score_origin_quarter`, `pickup_quarters`, `preceding_measures`
+and `detected_downbeat_measure` to make that shift explicit. Both MIDI files use
+the General MIDI drum channel (zero-based channel 9).
 The short MIDI note gates are audition lengths, not estimated acoustic durations.
 
 `preview.wav` uses a small deterministic synthesizer at original event times. It
@@ -97,6 +119,9 @@ Notation tests cover original timing versus quantized timing, duplicate-hit
 collisions, all supported meter/grid combinations, two balanced voices,
 percussion channel and pitch mapping, tempo, tuplets, open hats and ghost/accent
 marks inside chords, missing-renderer behavior and unknown instrument IDs.
+Additional regressions cover 0.37/1.5-second anchors, fractional source-clip
+offsets, time-shift invariance, retained pickup notes, preceding measures,
+compound-meter pickups, edge extrapolation and unequal detected beat intervals.
 
 These checks validate export structure. They do not measure AI transcription
 accuracy, and MuseScore rendering should still be inspected on the target PC.
@@ -105,6 +130,9 @@ The synthetic demo's MusicXML was also rendered and visually inspected with
 Verovio 6.4.1 during development: percussion clef, meter, quarter-note tempo,
 two voices, rests, beams, ghost parentheses, accents, open hi-hat and tom fill
 were visible. Verovio was a temporary QA tool, not an application dependency.
+The automatic-grid update was also checked with a three-beat pickup before a
+downbeat at 1.5 seconds: all pickup notes, both voices, their rests and the
+transition into the first complete bar rendered correctly.
 An official MuseScore 4.7.7 AppImage was obtained, but this container could not
 start its Qt/GTK interface without a display, even during CLI conversion.
 That attempt does **not** constitute MuseScore PDF verification; desktop or

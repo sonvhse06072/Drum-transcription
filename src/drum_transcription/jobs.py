@@ -18,6 +18,25 @@ from .domain import DrumHit, JobOptions, ScoreOptions, Transcription
 LOGGER = logging.getLogger(__name__)
 
 
+def job_options(data: dict) -> JobOptions:
+    """Saved v0.1 jobs used explicit manual timing and remain readable."""
+    if "rhythm_mode" not in data:
+        data = {
+            "bpm": 120,
+            "meter": "4/4",
+            "first_downbeat_seconds": 0,
+            **data,
+            "rhythm_mode": "manual",
+        }
+    return JobOptions.model_validate(data)
+
+
+def manual_score_options(options: JobOptions) -> ScoreOptions:
+    if options.rhythm_mode != "manual":
+        raise ValueError("Automatic timing must be resolved from the audio before exporting.")
+    return ScoreOptions.model_validate(options.model_dump(include=set(ScoreOptions.model_fields)))
+
+
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -136,6 +155,8 @@ class JobManager:
                 "created_at": now(),
                 "updated_at": now(),
                 "options": options.model_dump(),
+                "resolved_score_options": None,
+                "rhythm": None,
                 "warnings": [],
                 "files": {},
                 "metrics": {},
@@ -155,7 +176,9 @@ class JobManager:
         transcription = self.read_events(source_id)
         if options.first_downbeat_seconds >= transcription.duration_seconds:
             raise ValueError("Phách đầu tiên nằm ngoài audio thực tế.")
-        merged = JobOptions.model_validate({**previous["options"], **options.model_dump()})
+        merged = JobOptions.model_validate(
+            {**previous["options"], **options.model_dump(), "rhythm_mode": "manual"}
+        )
         new = self.create(merged, kind=previous["kind"], parent_id=source_id)
         try:
             for name in ("events.json", "source.wav", "drums.wav"):
@@ -181,22 +204,56 @@ class JobManager:
         try:
             from .engines import transcribe
             from .notation import export_score
+            from .rhythm import analyze_rhythm, write_rhythm_preview
 
             job = self.get(job_id)
             directory = self.directory(job_id)
-            options = JobOptions.model_validate(job["options"])
+            options = job_options(job["options"])
+            active_rhythm = None
             self.update(job_id, status="running", stage="Chuẩn bị audio", progress=5)
             files = {}
             if job["parent_id"]:
                 transcription = self.read_events(job_id)
+                score_options = manual_score_options(options)
                 self.update(job_id, stage="Dùng lại sự kiện gốc", progress=70)
             elif job["kind"] == "demo":
                 transcription = demo_transcription()
+                score_options = manual_score_options(options)
             else:
                 source = directory / "input.audio"
                 duration = decode_clip(
                     source, directory / "source.wav", options, self.settings.ffmpeg
                 )
+                if options.rhythm_mode == "auto":
+                    self.update(
+                        job_id,
+                        stage="Tự nhận diện tempo và phách 1 bằng Beat This! local",
+                        progress=15,
+                    )
+                    active_rhythm = analyze_rhythm(
+                        directory / "source.wav",
+                        self.settings.models_dir,
+                        device=options.device,
+                        meter_hint=options.meter,
+                    )
+                    if active_rhythm.first_downbeat_seconds >= duration:
+                        raise ValueError(
+                            "Phách 1 phát hiện nằm ngoài đoạn audio. Thử đoạn dài hơn."
+                        )
+                    score_options = ScoreOptions(
+                        title=options.title,
+                        bpm=active_rhythm.bpm,
+                        meter=active_rhythm.meter,
+                        subdivisions=options.subdivisions,
+                        first_downbeat_seconds=active_rhythm.first_downbeat_seconds,
+                    )
+                    self.update(
+                        job_id,
+                        resolved_score_options=score_options.model_dump(),
+                        rhythm=active_rhythm.model_dump(),
+                    )
+                else:
+                    score_options = manual_score_options(options)
                 inference_audio = directory / "source.wav"
                 if options.separate_drums:
                     self.update(job_id, stage="Tách trống bằng Demucs local", progress=20)
@@ -212,6 +269,7 @@ class JobManager:
                     models_dir=self.settings.models_dir,
                 )
                 transcription.duration_seconds = duration
+                transcription.rhythm = active_rhythm
                 transcription.metadata.update(
                     {
                         "clip_start_seconds": options.clip_start_seconds,
@@ -227,12 +285,20 @@ class JobManager:
             (directory / "events.json").write_text(
                 transcription.model_dump_json(indent=2), encoding="utf-8"
             )
+            if active_rhythm is not None:
+                (directory / "rhythm.json").write_text(
+                    active_rhythm.model_dump_json(indent=2), encoding="utf-8"
+                )
+                write_rhythm_preview(
+                    directory / "source.wav", active_rhythm, directory / "beats.wav"
+                )
             self.update(job_id, stage="Căn nhịp và xuất MusicXML / MIDI", progress=80)
-            score_options = ScoreOptions.model_validate(
-                options.model_dump(include=set(ScoreOptions.model_fields))
-            )
             exported = export_score(
-                transcription, score_options, directory, self.settings.musescore
+                transcription,
+                score_options,
+                directory,
+                self.settings.musescore,
+                rhythm=active_rhythm,
             )
             for key, filename in exported.get("files", {}).items():
                 name = Path(filename).name
@@ -242,10 +308,18 @@ class JobManager:
                 ("events", "events.json"),
                 ("source_audio", "source.wav"),
                 ("drums_audio", "drums.wav"),
+                ("rhythm", "rhythm.json"),
+                ("beat_preview", "beats.wav"),
             ):
                 if (directory / name).is_file():
                     files[key] = f"/api/jobs/{job_id}/files/{name}"
-            warnings = list(dict.fromkeys(transcription.warnings + exported.get("warnings", [])))
+            warnings = list(
+                dict.fromkeys(
+                    transcription.warnings
+                    + exported.get("warnings", [])
+                    + (active_rhythm.warnings if active_rhythm else [])
+                )
+            )
             if not transcription.hits:
                 warnings.append(
                     "Không tìm thấy cú đánh. Bản sheet trống không chứng minh audio không có trống; hãy kiểm tra ngưỡng hoặc model."
@@ -258,6 +332,13 @@ class JobManager:
                 "elapsed_seconds": round(time.monotonic() - start, 2),
                 "engine": transcription.engine,
                 "reused_inference": bool(job["parent_id"]),
+                "bpm_source": "beat_this"
+                if active_rhythm
+                else ("demo" if job["kind"] == "demo" else "user"),
+                "first_downbeat_seconds": score_options.first_downbeat_seconds,
+                "first_downbeat_original_seconds": options.clip_start_seconds
+                + score_options.first_downbeat_seconds,
+                "rhythm_reused": bool(job["parent_id"] and transcription.rhythm),
             }
             self.update(
                 job_id,
@@ -267,6 +348,8 @@ class JobManager:
                 files=files,
                 warnings=warnings,
                 metrics=metrics,
+                resolved_score_options=score_options.model_dump(),
+                rhythm=active_rhythm.model_dump() if active_rhythm else None,
             )
         except Exception as exc:
             LOGGER.exception("Job %s failed", job_id)

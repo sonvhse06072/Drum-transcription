@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from drum_transcription.app import create_app
 from drum_transcription.config import Settings
-from drum_transcription.domain import DrumHit, JobOptions, Transcription
+from drum_transcription.domain import DrumHit, JobOptions, RhythmAnalysis, Transcription
 from drum_transcription.jobs import JobManager
 
 
@@ -33,6 +33,7 @@ def test_demo_and_rescore_never_call_ai_and_keep_raw_events(settings, monkeypatc
         pytest.fail("Demo or rescore must not call an AI engine")
 
     monkeypatch.setattr("drum_transcription.engines.transcribe", forbidden)
+    monkeypatch.setattr("drum_transcription.rhythm.analyze_rhythm", forbidden)
     monkeypatch.setattr(Settings, "musescore", property(lambda self: None))
     with TestClient(create_app(settings)) as client:
         response = client.post("/api/demo")
@@ -112,7 +113,12 @@ def test_real_upload_decodes_clip_and_calls_explicit_engine(settings, monkeypatc
             "/api/jobs",
             data={
                 "options": JobOptions(
-                    clip_start_seconds=0.5, clip_duration_seconds=1
+                    rhythm_mode="manual",
+                    bpm=120,
+                    meter="4/4",
+                    first_downbeat_seconds=0,
+                    clip_start_seconds=0.5,
+                    clip_duration_seconds=1,
                 ).model_dump_json()
             },
             files={"file": ("test.wav", buffer.getvalue(), "audio/wav")},
@@ -166,3 +172,132 @@ def test_static_assets_are_self_contained(settings):
             assert client.get(path).status_code == 200
         policy = client.get("/").headers["content-security-policy"]
         assert "connect-src 'self'" in policy
+
+
+def detected_fractional_rhythm():
+    return RhythmAnalysis(
+        bpm=120,
+        meter="4/4",
+        first_downbeat_seconds=1.613,
+        beats_seconds=[0.113 + i * 0.5 for i in range(16)],
+        downbeats_seconds=[1.613 + i * 2 for i in range(4)],
+        beat_positions_quarters=[float(i - 3) for i in range(16)],
+    )
+
+
+def test_automatic_job_uses_fractional_detected_anchor_and_preserves_pickup(settings, monkeypatch):
+    if settings.ffmpeg is None:
+        pytest.skip("FFmpeg required")
+    monkeypatch.setattr(Settings, "musescore", property(lambda self: None))
+    monkeypatch.setattr(
+        "drum_transcription.engines.get_engine_status",
+        lambda _: [
+            {"id": "adtof", "ready": True, "label": "Test", "detail": "", "classes": 5},
+        ],
+    )
+    monkeypatch.setattr(
+        "drum_transcription.rhythm.rhythm_status",
+        lambda _: {"ready": True, "detail": "", "engine": "beat_this"},
+    )
+    detector_calls, drum_calls = [], []
+
+    def detector(path, models_dir, **kwargs):
+        assert sf.info(path).duration == pytest.approx(8)
+        assert kwargs["meter_hint"] is None
+        detector_calls.append(path)
+        return detected_fractional_rhythm()
+
+    def engine(path, name, **kwargs):
+        drum_calls.append(name)
+        return Transcription(
+            engine="test",
+            duration_seconds=8,
+            hits=[
+                DrumHit(time_seconds=0.613, instrument="snare"),
+                DrumHit(time_seconds=1.613, instrument="kick"),
+                DrumHit(time_seconds=3.613, instrument="kick"),
+            ],
+        )
+
+    monkeypatch.setattr("drum_transcription.rhythm.analyze_rhythm", detector)
+    monkeypatch.setattr("drum_transcription.engines.transcribe", engine)
+    buffer = io.BytesIO()
+    sf.write(buffer, np.zeros(152000, dtype=np.float32), 16000, format="WAV")
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/api/jobs",
+            data={
+                "options": JobOptions(
+                    clip_start_seconds=1.5, clip_duration_seconds=8
+                ).model_dump_json()
+            },
+            files={"file": ("clip.wav", buffer.getvalue(), "audio/wav")},
+        )
+        assert response.status_code == 202, response.text
+        job = completed(client, response.json()["id"])
+        assert job["options"]["bpm"] is None
+        assert job["options"]["first_downbeat_seconds"] is None
+        resolved = job["resolved_score_options"]
+        assert resolved["first_downbeat_seconds"] == pytest.approx(1.613)
+        assert resolved["bpm"] == 120
+        assert job["metrics"]["first_downbeat_original_seconds"] == pytest.approx(3.113)
+        assert job["metrics"]["bpm_source"] == "beat_this"
+        assert job["metrics"]["score_hit_count"] == 3
+        assert job["metrics"]["hits_before_downbeat"] == 1
+        assert job["metrics"]["score_origin_quarter"] < 0
+        assert client.get(job["files"]["beat_preview"]).content.startswith(b"RIFF")
+        assert client.get(job["files"]["rhythm"]).json()["first_downbeat_seconds"] == pytest.approx(
+            1.613
+        )
+        original = client.get(job["files"]["events"]).json()
+        assert [hit["time_seconds"] for hit in original["hits"]] == [0.613, 1.613, 3.613]
+        second = client.post(f"/api/jobs/{job['id']}/rescore", json={**resolved, "bpm": 118})
+        assert second.status_code == 202
+        rescored = completed(client, second.json()["id"])
+        assert rescored["options"]["rhythm_mode"] == "manual"
+        assert rescored["metrics"]["bpm_source"] == "user"
+        assert client.get(rescored["files"]["events"]).json() == original
+        assert len(detector_calls) == len(drum_calls) == 1
+
+
+def test_missing_rhythm_model_does_not_silently_use_defaults(settings, monkeypatch):
+    monkeypatch.setattr(
+        "drum_transcription.engines.get_engine_status",
+        lambda _: [
+            {"id": "adtof", "ready": True, "detail": ""},
+        ],
+    )
+    monkeypatch.setattr(
+        "drum_transcription.rhythm.rhythm_status",
+        lambda _: {"ready": False, "detail": "setup-models beat_this"},
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/api/jobs",
+            data={"options": JobOptions().model_dump_json()},
+            files={"file": ("clip.mp3", b"fake", "audio/mpeg")},
+        )
+        assert response.status_code == 409
+        assert "beat_this" in response.json()["detail"]
+        assert client.get("/api/jobs").json()["jobs"] == []
+
+
+def test_auto_options_require_no_manual_timing_and_reject_disguised_override():
+    defaults = JobOptions()
+    assert defaults.rhythm_mode == "auto"
+    assert defaults.bpm is defaults.first_downbeat_seconds is None
+    with pytest.raises(ValueError, match="Automatic timing"):
+        JobOptions(bpm=120, first_downbeat_seconds=0)
+    with pytest.raises(ValueError, match="Manual timing"):
+        JobOptions(rhythm_mode="manual")
+
+
+def test_legacy_job_keeps_its_original_manual_timing():
+    from drum_transcription.jobs import job_options
+
+    options = job_options(
+        {"title": "Old job", "bpm": 95, "meter": "3/4", "first_downbeat_seconds": 1.5}
+    )
+    assert options.rhythm_mode == "manual"
+    assert options.bpm == 95
+    assert options.first_downbeat_seconds == 1.5

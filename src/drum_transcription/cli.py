@@ -16,7 +16,7 @@ def main(argv: list[str] | None = None) -> None:
     setup = commands.add_parser(
         "setup-models", help="Explicitly prepare/download local model files"
     )
-    setup.add_argument("engine", choices=["adtof", "adt_str", "demucs"])
+    setup.add_argument("engine", choices=["adtof", "adt_str", "demucs", "beat_this"])
     setup.add_argument("--models-dir", type=Path, default=None)
     doctor = commands.add_parser("doctor", help="Report local dependencies and model readiness")
     doctor.add_argument("--models-dir", type=Path, default=None)
@@ -34,7 +34,11 @@ def main(argv: list[str] | None = None) -> None:
 
         uvicorn.run(create_app(settings), host=args.host, port=args.port)
     elif args.command == "setup-models":
-        if args.engine == "demucs":
+        if args.engine == "beat_this":
+            from .rhythm import prepare_rhythm_model
+
+            result = prepare_rhythm_model(models_dir)
+        elif args.engine == "demucs":
             from .audio import prepare_demucs
 
             result = prepare_demucs(models_dir)
@@ -46,6 +50,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "doctor":
         from .audio import separation_status
         from .engines import get_engine_status
+        from .rhythm import rhythm_status
 
         print(
             json.dumps(
@@ -54,6 +59,7 @@ def main(argv: list[str] | None = None) -> None:
                     "musescore": settings.musescore,
                     "models_dir": str(models_dir),
                     "engines": get_engine_status(models_dir),
+                    "rhythm": rhythm_status(models_dir),
                     "separation": separation_status(models_dir),
                 },
                 ensure_ascii=False,

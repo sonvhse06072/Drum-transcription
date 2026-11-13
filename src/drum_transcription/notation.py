@@ -1,7 +1,7 @@
 """Deterministic drum engraving; recognition and musical interpretation stay separate.
 
-The score uses the supplied constant tempo and first-downbeat anchor. It does not
-claim that short MIDI note lengths, velocities or expressive marks were detected.
+Detected beat times or an explicit manual grid determine note positions. Score
+playback uses a nominal tempo; raw MIDI retains the original event times.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ import math
 import os
 import shutil
 import subprocess
+from bisect import bisect_right
 from collections import defaultdict
 from dataclasses import dataclass
 from fractions import Fraction
@@ -34,7 +35,7 @@ from music21 import (
     tempo,
 )
 
-from .domain import DrumHit, ScoreOptions, Transcription
+from .domain import DrumHit, RhythmAnalysis, ScoreOptions, Transcription
 from .preview_audio import write_preview_audio
 
 
@@ -85,8 +86,41 @@ class QuantizedHit:
     error_seconds: float
 
 
+def _interpolate(value: float, source: list[float], target: list[float]) -> float:
+    """Piecewise linear interpolation, using the nearest interval at either edge."""
+    index = min(max(bisect_right(source, value) - 1, 0), len(source) - 2)
+    position = (value - source[index]) / (source[index + 1] - source[index])
+    return target[index] + position * (target[index + 1] - target[index])
+
+
+def _time_to_quarter(when: float, options: ScoreOptions, rhythm: RhythmAnalysis | None) -> float:
+    if rhythm is not None:
+        return _interpolate(when, rhythm.beats_seconds, rhythm.beat_positions_quarters)
+    return (when - options.first_downbeat_seconds) * options.bpm / 60
+
+
+def _quarter_to_time(quarter: float, options: ScoreOptions, rhythm: RhythmAnalysis | None) -> float:
+    if rhythm is not None:
+        return _interpolate(quarter, rhythm.beat_positions_quarters, rhythm.beats_seconds)
+    return options.first_downbeat_seconds + quarter * 60 / options.bpm
+
+
+def _meter_lengths(options: ScoreOptions) -> tuple[Fraction, Fraction]:
+    numerator, denominator = map(int, options.meter.split("/"))
+    bar_length = Fraction(numerator * 4, denominator)
+    beat_length = Fraction(3, 2) if denominator == 8 and numerator in (6, 9, 12) else Fraction(4, denominator)
+    return bar_length, beat_length
+
+
+def _score_origin(options: ScoreOptions, events: list[QuantizedHit]) -> Fraction:
+    """Start at a beat boundary so a cut within a beat has an intelligible pickup."""
+    _, beat_length = _meter_lengths(options)
+    earliest = min((event.quarter for event in events), default=Fraction(0))
+    return min(Fraction(0), (earliest // beat_length) * beat_length)
+
+
 def _quantize(
-    transcription: Transcription, options: ScoreOptions
+    transcription: Transcription, options: ScoreOptions, rhythm: RhythmAnalysis | None = None
 ) -> tuple[list[QuantizedHit], list[str], dict[str, Any]]:
     warnings: list[str] = []
     accepted: dict[tuple[Fraction, str], QuantizedHit] = {}
@@ -100,13 +134,12 @@ def _quantize(
         if hit.instrument not in INSTRUMENTS:
             unknown.add(hit.instrument)
             continue
-        relative = hit.time_seconds - options.first_downbeat_seconds
-        if relative < -1e-9:
+        if hit.time_seconds < options.first_downbeat_seconds - 1e-9:
             before += 1
-            continue
-        grid_position = max(0, math.floor(relative * options.bpm / 60 * options.subdivisions + 0.5))
+        musical_position = _time_to_quarter(hit.time_seconds, options, rhythm)
+        grid_position = math.floor(musical_position * options.subdivisions + 0.5)
         quarter = Fraction(grid_position, options.subdivisions)
-        error = float(quarter) * 60 / options.bpm - relative
+        error = _quarter_to_time(float(quarter), options, rhythm) - hit.time_seconds
         errors.append(abs(error))
         unsupported_marks.update(set(hit.articulations) - supported_marks)
         event = QuantizedHit(quarter, hit, error)
@@ -126,8 +159,17 @@ def _quantize(
         )
     if before:
         warnings.append(
-            f"{before} hit(s) before the first downbeat remain in raw events/MIDI but are omitted "
-            "from the score. Pickup measures are not implemented."
+            f"{before} hit(s) before the first downbeat are retained on the score grid; "
+            "negative positions form a pickup or preceding measures. Raw events/MIDI "
+            "retain their original clip times."
+        )
+    if rhythm is not None and any(
+        hit.time_seconds < rhythm.beats_seconds[0] or hit.time_seconds > rhythm.beats_seconds[-1]
+        for hit in transcription.hits
+    ):
+        warnings.append(
+            "Some hits lie outside the detected beat range. Their score positions use the nearest "
+            "beat interval extrapolated to the clip edge; review the pickup and ending."
         )
     if collisions:
         warnings.append(
@@ -248,17 +290,21 @@ def _duration_piece(remaining: Fraction, position: Fraction, triplets: bool) -> 
     return min(remaining, Fraction(1, 6) if triplets else Fraction(1, 8))
 
 
-def _append_rests(voice: stream.Voice, start: Fraction, end: Fraction, triplets: bool) -> None:
+def _append_rests(
+    voice: stream.Voice, start: Fraction, end: Fraction, triplets: bool,
+    *, alignment_origin: Fraction = Fraction(0),
+) -> None:
     cursor = start
     while cursor < end:
-        length = _duration_piece(end - cursor, cursor, triplets)
+        length = _duration_piece(end - cursor, cursor - alignment_origin, triplets)
         rest = note.Rest(quarterLength=length)
         voice.insert(cursor, rest)
         cursor += length
 
 
 def _build_score(
-    transcription: Transcription, options: ScoreOptions, events: list[QuantizedHit]
+    transcription: Transcription, options: ScoreOptions, events: list[QuantizedHit],
+    rhythm: RhythmAnalysis | None = None,
 ) -> tuple[stream.Score, int, dict[str, DrumHit]]:
     score = stream.Score(id="drum-score")
     score.metadata = metadata.Metadata(title=options.title)
@@ -267,19 +313,26 @@ def _build_score(
     part.partName = "Drum kit"
     part.partAbbreviation = "Dr."
     note_sources: dict[str, DrumHit] = {}
-    numerator, denominator = map(int, options.meter.split("/"))
-    bar_length = Fraction(numerator * 4, denominator)
-    beat_length = Fraction(3, 2) if denominator == 8 and numerator in (6, 9, 12) else Fraction(4, denominator)
-    clip_quarters = max(0, transcription.duration_seconds - options.first_downbeat_seconds) * options.bpm / 60
+    bar_length, beat_length = _meter_lengths(options)
+    origin = _score_origin(options, events)
+    first_bar_index = int(origin // bar_length)
+    has_pickup = origin != first_bar_index * bar_length
+    clip_quarters = max(0, _time_to_quarter(transcription.duration_seconds, options, rhythm))
     last_quarter = float(events[-1].quarter) + 1 / options.subdivisions if events else 0
-    bar_count = max(1, math.ceil(max(clip_quarters, last_quarter) / float(bar_length) - 1e-9))
+    final_bar_index = max(1, math.ceil(max(clip_quarters, last_quarter) / float(bar_length) - 1e-9))
+    bar_count = final_bar_index - first_bar_index
     by_measure: dict[int, list[QuantizedHit]] = defaultdict(list)
     for event in events:
         by_measure[int(event.quarter // bar_length)].append(event)
     triplets = options.subdivisions in (3, 6)
-    for bar_index in range(bar_count):
-        measure = stream.Measure(number=bar_index + 1)
-        if bar_index == 0:
+    for measure_index, bar_index in enumerate(range(first_bar_index, final_bar_index)):
+        measure_start = max(origin, bar_index * bar_length)
+        measure_length = (bar_index + 1) * bar_length - measure_start
+        measure = stream.Measure(number=measure_index if has_pickup else measure_index + 1)
+        if measure_length < bar_length:
+            measure.paddingLeft = bar_length - measure_length
+            measure.showNumber = stream.enums.ShowNumber.NEVER
+        if measure_index == 0:
             measure.insert(0, clef.PercussionClef())
             measure.insert(0, layout.StaffLayout(staffLines=5))
             measure.insert(0, meter.TimeSignature(options.meter))
@@ -289,19 +342,26 @@ def _build_score(
             groups: dict[Fraction, list[DrumHit]] = defaultdict(list)
             for event in by_measure.get(bar_index, []):
                 if INSTRUMENTS[event.hit.instrument].voice == voice_id:
-                    groups[event.quarter - bar_index * bar_length].append(event.hit)
+                    groups[event.quarter - measure_start].append(event.hit)
             if not groups:
-                rest = note.Rest(quarterLength=bar_length)
-                rest.fullMeasure = True
-                voice.insert(0, rest)
+                if measure_length == bar_length:
+                    rest = note.Rest(quarterLength=bar_length)
+                    rest.fullMeasure = True
+                    voice.insert(0, rest)
+                else:
+                    beat_start = Fraction(0)
+                    while beat_start < measure_length:
+                        beat_end = min(beat_start + beat_length, measure_length)
+                        _append_rests(voice, beat_start, beat_end, triplets, alignment_origin=beat_start)
+                        beat_start = beat_end
             else:
                 beat_start = Fraction(0)
-                while beat_start < bar_length:
-                    beat_end = min(beat_start + beat_length, bar_length)
+                while beat_start < measure_length:
+                    beat_end = min(beat_start + beat_length, measure_length)
                     positions = sorted(p for p in groups if beat_start <= p < beat_end)
                     cursor = beat_start
                     for index, position in enumerate(positions):
-                        _append_rests(voice, cursor, position, triplets)
+                        _append_rests(voice, cursor, position, triplets, alignment_origin=beat_start)
                         next_position = positions[index + 1] if index + 1 < len(positions) else beat_end
                         length = _duration_piece(next_position - position, position - beat_start, triplets)
                         notes = []
@@ -314,11 +374,11 @@ def _build_score(
                         element.stemDirection = "up" if voice_id == 1 else "down"
                         voice.insert(position, element)
                         cursor = position + length
-                    _append_rests(voice, cursor, beat_end, triplets)
+                    _append_rests(voice, cursor, beat_end, triplets, alignment_origin=beat_start)
                     beat_start = beat_end
             stream.makeNotation.makeTupletBrackets(voice, inPlace=True)
             measure.insert(0, voice)
-        if bar_index == bar_count - 1:
+        if bar_index == final_bar_index - 1:
             measure.rightBarline = bar.Barline("final")
         part.append(measure)
     # Beaming and tuplet brackets follow the declared meter; no hand-built beam
@@ -440,18 +500,34 @@ def export_score(
     options: ScoreOptions,
     output_dir: Path,
     musescore_bin: str | None = None,
+    *,
+    rhythm: RhythmAnalysis | None = None,
 ) -> dict[str, Any]:
     """Write editable notation and comparison files without modifying raw hits."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    events, warnings, metrics = _quantize(transcription, options)
+    if rhythm is not None and (
+        options.meter != rhythm.meter
+        or not math.isclose(options.first_downbeat_seconds, rhythm.first_downbeat_seconds, abs_tol=1e-6)
+    ):
+        raise ValueError("Detected rhythm grid does not match the resolved score settings.")
+    events, warnings, metrics = _quantize(transcription, options, rhythm)
+    origin = _score_origin(options, events)
+    bar_length, _ = _meter_lengths(options)
+    first_bar_index = int(origin // bar_length)
+    pickup_length = (first_bar_index + 1) * bar_length - origin if origin != first_bar_index * bar_length else Fraction(0)
+    if first_bar_index < -1:
+        warnings.append(
+            "The first detected/selected downbeat follows more than one preceding measure. "
+            "Earlier hits are preserved using the available grid; review the inferred bar numbering."
+        )
     raw_midi = output_dir / "raw.mid"
     score_midi = output_dir / "score.mid"
     xml_path = output_dir / "score.musicxml"
     preview_path = output_dir / "preview.wav"
     _write_midi(raw_midi, [(hit.time_seconds, hit) for hit in transcription.hits], options)
-    _write_midi(score_midi, [(float(event.quarter) * 60 / options.bpm, event.hit) for event in events], options)
-    score, bar_count, note_sources = _build_score(transcription, options, events)
+    _write_midi(score_midi, [(float(event.quarter - origin) * 60 / options.bpm, event.hit) for event in events], options)
+    score, bar_count, note_sources = _build_score(transcription, options, events, rhythm)
     score.write("musicxml", fp=xml_path)
     _fix_percussion_xml(xml_path, note_sources)
     write_preview_audio(transcription.hits, preview_path, duration_seconds=transcription.duration_seconds)
@@ -472,11 +548,20 @@ def export_score(
     else:
         warnings.append("MuseScore was not found. Open score.musicxml in MuseScore to view, edit or export PDF.")
     warnings.append("Preview audio uses synthesized percussion at original hit times; it is not a separated drum recording.")
+    if rhythm is not None:
+        warnings.append(
+            "The sheet follows detected beat positions. Score MIDI uses the displayed nominal "
+            "constant BPM; raw MIDI and preview audio retain the original performance timing."
+        )
     metrics.update({
         "bars": bar_count,
-        "bpm_source": "user",
-        "tempo_mode": "constant",
+        "bpm_source": rhythm.engine if rhythm is not None else "user",
+        "tempo_mode": "detected_beat_grid_nominal_playback" if rhythm is not None else "constant",
         "first_downbeat_seconds": options.first_downbeat_seconds,
+        "score_origin_quarter": float(origin),
+        "pickup_quarters": float(pickup_length),
+        "preceding_measures": -first_bar_index,
+        "detected_downbeat_measure": -first_bar_index if pickup_length else 1 - first_bar_index,
         "legend": [
             {"id": name, "label": INSTRUMENTS[name].label, "gm_note": INSTRUMENTS[name].midi,
              "staff_position": INSTRUMENTS[name].display, "notehead": INSTRUMENTS[name].head,

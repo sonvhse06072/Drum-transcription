@@ -58,7 +58,7 @@ def decode_clip(source: Path, destination: Path, options: JobOptions, ffmpeg: st
     duration = float(info.duration)
     if duration < 0.1:
         raise ValueError("Đoạn audio rỗng hoặc quá ngắn. Kiểm tra điểm bắt đầu.")
-    if options.first_downbeat_seconds >= duration:
+    if options.first_downbeat_seconds is not None and options.first_downbeat_seconds >= duration:
         raise ValueError("Phách đầu tiên nằm ngoài đoạn audio thực tế.")
     return duration
 
