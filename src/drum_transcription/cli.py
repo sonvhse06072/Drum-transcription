@@ -16,7 +16,7 @@ def main(argv: list[str] | None = None) -> None:
     setup = commands.add_parser(
         "setup-models", help="Explicitly prepare/download local model files"
     )
-    setup.add_argument("engine", choices=["adtof", "adt_str", "demucs", "beat_this"])
+    setup.add_argument("engine", choices=["adtof", "adt_str", "demucs", "beat_this", "sheetsage2_refined"])
     setup.add_argument("--models-dir", type=Path, default=None)
     doctor = commands.add_parser("doctor", help="Report local dependencies and model readiness")
     doctor.add_argument("--models-dir", type=Path, default=None)
@@ -38,6 +38,10 @@ def main(argv: list[str] | None = None) -> None:
             from .rhythm import prepare_rhythm_model
 
             result = prepare_rhythm_model(models_dir)
+        elif args.engine == "sheetsage2_refined":
+            from .rhythm_sheetsage2 import prepare_meter_model
+
+            result = prepare_meter_model(models_dir)
         elif args.engine == "demucs":
             from .audio import prepare_demucs
 
@@ -51,6 +55,7 @@ def main(argv: list[str] | None = None) -> None:
         from .audio import separation_status
         from .engines import get_engine_status
         from .rhythm import rhythm_status
+        from .rhythm_sheetsage2 import meter_status
 
         print(
             json.dumps(
@@ -60,6 +65,10 @@ def main(argv: list[str] | None = None) -> None:
                     "models_dir": str(models_dir),
                     "engines": get_engine_status(models_dir),
                     "rhythm": rhythm_status(models_dir),
+                    "rhythm_engines": [
+                        {"id": "beat_this", **rhythm_status(models_dir)},
+                        meter_status(models_dir),
+                    ],
                     "separation": separation_status(models_dir),
                 },
                 ensure_ascii=False,

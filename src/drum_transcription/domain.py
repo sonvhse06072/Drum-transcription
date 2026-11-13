@@ -192,6 +192,7 @@ class ScoreOptions(BaseModel):
 
 class JobOptions(ScoreOptions):
     rhythm_mode: Literal["auto", "manual"] = "auto"
+    rhythm_engine: Literal["beat_this", "sheetsage2_refined"] = "beat_this"
     bpm: float | None = Field(default=None, ge=20, le=400, allow_inf_nan=False)
     meter: str | None = Field(default=None, pattern=METER_PATTERN)
     first_downbeat_seconds: float | None = Field(default=None, ge=0, allow_inf_nan=False)
