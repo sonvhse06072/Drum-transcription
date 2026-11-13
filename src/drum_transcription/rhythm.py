@@ -18,6 +18,7 @@ import soundfile as sf
 
 from .domain import METER_PATTERN, EngineUnavailable, RhythmAnalysis, RhythmBar
 from .engines.common import require_file, select_device
+from .meter_decoder import decode_barlines
 
 BEAT_THIS_REVISION = "b95c8ab0c58c2d9fcfd40508ae8dffbc05ac4f5c"
 CHECKPOINT_URL = "https://cloud.cp.jku.at/public.php/dav/files/7ik4RrBKTS273gp/final0.ckpt"
@@ -182,6 +183,8 @@ def analysis_from_beats(
     *,
     duration_seconds: float,
     meter_hint: str | None = None,
+    downbeat_logits=None,
+    downbeat_fps: int = 50,
 ) -> RhythmAnalysis:
     """Keep local bar structure and timestamped tempo, with explicit uncertainty.
 
@@ -216,15 +219,36 @@ def analysis_from_beats(
         np.diff(downbeat_indices) <= 0
     ):
         raise ValueError("Beat và phách 1 không khớp; không tự lấy cú đánh đầu làm phách 1.")
+    raw_downbeat_indices = downbeat_indices.copy()
+    decode_result = None
+    if downbeat_logits is not None:
+        decode_result = decode_barlines(
+            beats, raw_downbeat_indices, np.asarray(downbeat_logits).reshape(-1),
+            fps=downbeat_fps,
+        )
+        downbeat_indices = np.asarray(decode_result.indices, dtype=int)
     aligned_downbeats = beats[downbeat_indices]
     counts = np.diff(downbeat_indices)
     frequencies = Counter(int(value) for value in counts)
     warnings = []
+    if decode_result is not None and decode_result.skipped_raw_markers:
+        warnings.append(
+            f"Bộ giải mã đã bỏ {decode_result.skipped_raw_markers} phách 1 nghi thừa "
+            f"và thêm {decode_result.inserted_markers} ranh giới ứng viên. "
+            "Đây là ước lượng từ điểm model, không phải xác nhận nhịp chính xác; "
+            "hãy nghe click và kiểm tra từng ô."
+        )
+    if decode_result is not None and decode_result.mode == "raw_excessive_correction":
+        warnings.append(
+            "Điểm downbeat gợi ý thay đổi quá nhiều ranh giới. Đã giữ dự đoán gốc "
+            "để không âm thầm viết lại ô nhịp; cần kiểm tra thủ công."
+        )
     if discarded_tail_beats or discarded_tail_downbeats:
         warnings.append(
             "Đã bỏ marker beat/downbeat trong frame đệm ở mép cuối clip; không có mẫu audio tương ứng để phát."
         )
 
+    raw_downbeat_indices_set = set(int(i) for i in raw_downbeat_indices)
     # Only an isolated multiple bracketed by the same count is tentatively split.
     # Sustained regimes (e.g. 2,2,2,4,4,4) must not be flattened with a global GCD:
     # they can be a real meter change or a changed model interpretation.
@@ -349,7 +373,9 @@ def analysis_from_beats(
         for offset, unit in enumerate(units):
             positions[start + offset + 1] = positions[start + offset] + unit
         bar_source = source
-        if source == "detected" and use_pattern:
+        if source == "detected" and int(start) not in raw_downbeat_indices_set:
+            bar_source = "estimated_barline"
+        if bar_source == "detected" and use_pattern:
             bar_source = "detected_grouping"
         if index == 0 and meter_hint is not None:
             bar_source = "user_hint"
@@ -436,6 +462,8 @@ def analysis_from_beats(
         review_reasons.append("many_single_beat_intervals")
     if frequent_changes:
         review_reasons.append("frequent_meter_or_group_changes")
+    if decode_result is not None and decode_result.skipped_raw_markers >= 3:
+        review_reasons.append("downbeat_model_disagreement")
     readable_review_reasons = []
     if short_bar_intervals >= 3:
         readable_review_reasons.append(
@@ -471,7 +499,13 @@ def analysis_from_beats(
         metadata={
             "source_revision": BEAT_THIS_REVISION,
             "model": "final0",
-            "postprocessing": "local_bar_map_no_dbn",
+            "postprocessing": "local_bar_map_viterbi_no_dbn" if decode_result else "local_bar_map_no_dbn",
+            "barline_decoder_mode": decode_result.mode if decode_result else "raw_peaks",
+            "barline_filtered_count": decode_result.skipped_raw_markers if decode_result else 0,
+            "barline_inserted_count": decode_result.inserted_markers if decode_result else 0,
+            "barline_raw_marker_count": len(raw_downbeat_indices),
+            "barline_selected_marker_count": len(downbeat_indices),
+            "raw_downbeat_indices": raw_downbeat_indices.tolist(),
             "time_resolution_seconds": 0.02,
             "time_reference": "decoded_clip_start",
             "bpm_kind": "inverse_median_seconds_per_quarter",
@@ -537,10 +571,24 @@ def analyze_rhythm(
         # pathname from activating upstream's named-model download fallback.
         with checkpoint.open("rb") as local_weights:
             tracker = Audio2Beats(checkpoint_path=local_weights, device=selected, dbn=False)
+        # Keep the same model forward pass for logits and detected timestamps.
+        # The raw peak list alone loses the evidence needed to reject spurious
+        # downbeats in mixed meter. Older test adapters keep the original API.
+        downbeat_logits = None
         with torch.inference_mode():
-            beats, downbeats = tracker(waveform, rate)
+            if all(
+                hasattr(tracker, name)
+                for name in ("signal2spect", "spect2frames", "frames2beats")
+            ):
+                spectrogram = tracker.signal2spect(waveform, rate)
+                beat_frames, downbeat_frames = tracker.spect2frames(spectrogram)
+                beats, downbeats = tracker.frames2beats(beat_frames, downbeat_frames)
+                downbeat_logits = downbeat_frames.detach().float().cpu().numpy()
+            else:
+                beats, downbeats = tracker(waveform, rate)
         result = analysis_from_beats(
-            beats, downbeats, duration_seconds=len(waveform) / rate, meter_hint=meter_hint
+            beats, downbeats, duration_seconds=len(waveform) / rate,
+            meter_hint=meter_hint, downbeat_logits=downbeat_logits,
         )
         result.metadata["device"] = selected
         manifest_path = checkpoint.parent / "manifest.json"
