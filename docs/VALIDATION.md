@@ -1,5 +1,7 @@
 # Kịch bản kiểm chứng chất lượng
 
+[Ca nhạc đã phát hành: Room 34 / Micro-Prog](REAL_MUSIC_VALIDATION.md) đã có nguồn audio CC0, chuỗi bảy ô do tác giả mô tả và kết quả model thật. Đây là một ca nhận diện meter thất bại được giữ để tái kiểm tra, không phải ca accuracy đạt.
+
 ## 1. Tách hai câu hỏi
 
 **Phần mềm chạy được**: model thật tải local, audio được xử lý, sự kiện hợp lệ, MusicXML/MIDI mở được, app không gọi mạng khi suy luận.

@@ -1,0 +1,344 @@
+{
+  "schema_version": 1,
+  "app_commit": "96fd763d18ae1c58a5e204d70dd87800b0b727f8",
+  "validation_date": "2026-11-14",
+  "validation_timezone": "Asia/Saigon",
+  "source": {
+    "artist": "Room 34 (Scott Anderson)",
+    "title": "The Fall of the Village of the Infinitesimal Forest at the Hands of the Royal Aggressor [An Epic in Seven Parts]",
+    "short_label": "Micro-Prog",
+    "composer_page": "https://blog.room34.com/archives/5278",
+    "commons_page": "https://commons.wikimedia.org/wiki/File:Room_34_-_24_-_The_Fall_of_the_Village_of_the_Infinitesimal_Forest_at_the_Hands_of_the_Royal_Aggressor_An_Epic_in_Seven_Parts.ogg",
+    "download_url": "https://upload.wikimedia.org/wikipedia/commons/b/b6/Room_34_-_24_-_The_Fall_of_the_Village_of_the_Infinitesimal_Forest_at_the_Hands_of_the_Royal_Aggressor_An_Epic_in_Seven_Parts.ogg",
+    "resolved_url": "https://upload.wikimedia.org/wikipedia/commons/b/b6/Room_34_-_24_-_The_Fall_of_the_Village_of_the_Infinitesimal_Forest_at_the_Hands_of_the_Royal_Aggressor_An_Epic_in_Seven_Parts.ogg",
+    "content_type": "application/ogg",
+    "license": "CC0 1.0 Universal",
+    "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "license_evidence": "Composer article explicitly states CC0; Wikimedia mirror credits the original FMA upload. Commons license review is pending.",
+    "bytes": 328639,
+    "sha1": "f6134cf7a35dbddb8255c1a3f8801329e567b9d9",
+    "sha256": "93b965383f397943d7526c7a150f3beff80ca42b544432659889a99f4defa4eb",
+    "duration_seconds": 14.576326530612246,
+    "sample_rate": 44100,
+    "channels": 2,
+    "composer_meter_sequence": [
+      "6/8",
+      "7/8",
+      "2/4",
+      "2/4",
+      "7/8",
+      "9/8",
+      "5/16"
+    ],
+    "composer_bar_count": 7,
+    "actual_signature_changes_in_list": 5,
+    "composer_bpm": null,
+    "composer_transition_timestamps": null,
+    "recording_note": "Published composed recording with real bass/guitars/recorders and programmed MIDI drums/keys, not a synthetic fixture generated for this app."
+  },
+  "rhythm_model": {
+    "source_revision": "b95c8ab0c58c2d9fcfd40508ae8dffbc05ac4f5c",
+    "model": "final0",
+    "weights_sha256": "8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331",
+    "time_resolution_seconds": 0.02
+  },
+  "results": {
+    "source_file": "data/real-music/room34-micro-prog/room34-micro-prog.ogg",
+    "input": "full unmodified recording",
+    "device": "cpu",
+    "torch_threads": 2,
+    "manual_bpm": null,
+    "meter_hint": null,
+    "composer_meter_sequence": [
+      "6/8",
+      "7/8",
+      "2/4",
+      "2/4",
+      "7/8",
+      "9/8",
+      "5/16"
+    ],
+    "ground_truth_timestamps_available": false,
+    "accuracy_benchmark": false,
+    "status": "completed",
+    "detected_bpm": 187.49999999999983,
+    "first_downbeat_seconds": 0.06,
+    "detected_bar_count": 18,
+    "detected_meter_sequence": [
+      "2/4",
+      "4/4",
+      "4/4",
+      "2/4",
+      "2/4",
+      "4/4",
+      "1/4",
+      "4/4",
+      "1/4",
+      "1/4",
+      "1/4",
+      "3/4",
+      "4/4",
+      "2/4",
+      "2/4",
+      "4/4",
+      "4/4",
+      "4/4"
+    ],
+    "detected_bars": [
+      {
+        "start_seconds": 0.06,
+        "end_seconds": 0.72,
+        "meter": "2/4",
+        "grouping": [
+          1,
+          1
+        ],
+        "source": "detected"
+      },
+      {
+        "start_seconds": 0.72,
+        "end_seconds": 2.04,
+        "meter": "4/4",
+        "grouping": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "source": "detected"
+      },
+      {
+        "start_seconds": 2.04,
+        "end_seconds": 3.36,
+        "meter": "4/4",
+        "grouping": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "source": "detected"
+      },
+      {
+        "start_seconds": 3.36,
+        "end_seconds": 4.06,
+        "meter": "2/4",
+        "grouping": [
+          1,
+          1
+        ],
+        "source": "detected"
+      },
+      {
+        "start_seconds": 4.06,
+        "end_seconds": 4.68,
+        "meter": "2/4",
+        "grouping": [
+          1,
+          1
+        ],
+        "source": "detected"
+      },
+      {
+        "start_seconds": 4.68,
+        "end_seconds": 5.72,
+        "meter": "4/4",
+        "grouping": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "source": "detected"
+      },
+      {
+        "start_seconds": 5.72,
+        "end_seconds": 5.88,
+        "meter": "1/4",
+        "grouping": [
+          1
+        ],
+        "source": "detected"
+      },
+      {
+        "start_seconds": 5.88,
+        "end_seconds": 7.06,
+        "meter": "4/4",
+        "grouping": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "source": "detected"
+      },
+      {
+        "start_seconds": 7.06,
+        "end_seconds": 7.2,
+        "meter": "1/4",
+        "grouping": [
+          1
+        ],
+        "source": "detected"
+      },
+      {
+        "start_seconds": 7.2,
+        "end_seconds": 7.38,
+        "meter": "1/4",
+        "grouping": [
+          1
+        ],
+        "source": "detected"
+      },
+      {
+        "start_seconds": 7.38,
+        "end_seconds": 7.54,
+        "meter": "1/4",
+        "grouping": [
+          1
+        ],
+        "source": "detected"
+      },
+      {
+        "start_seconds": 7.54,
+        "end_seconds": 8.54,
+        "meter": "3/4",
+        "grouping": [
+          1,
+          1,
+          1
+        ],
+        "source": "detected"
+      },
+      {
+        "start_seconds": 8.54,
+        "end_seconds": 9.88,
+        "meter": "4/4",
+        "grouping": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "source": "detected"
+      },
+      {
+        "start_seconds": 9.88,
+        "end_seconds": 10.54,
+        "meter": "2/4",
+        "grouping": [
+          1,
+          1
+        ],
+        "source": "detected"
+      },
+      {
+        "start_seconds": 10.54,
+        "end_seconds": 11.2,
+        "meter": "2/4",
+        "grouping": [
+          1,
+          1
+        ],
+        "source": "detected"
+      },
+      {
+        "start_seconds": 11.2,
+        "end_seconds": 12.54,
+        "meter": "4/4",
+        "grouping": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "source": "detected"
+      },
+      {
+        "start_seconds": 12.54,
+        "end_seconds": 13.88,
+        "meter": "4/4",
+        "grouping": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "source": "detected"
+      },
+      {
+        "start_seconds": 13.88,
+        "end_seconds": 15.160000000000002,
+        "meter": "4/4",
+        "grouping": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "source": "extrapolated"
+      }
+    ],
+    "review_status": "unstable",
+    "observed_counts": [
+      2,
+      4,
+      4,
+      2,
+      2,
+      4,
+      1,
+      4,
+      1,
+      1,
+      1,
+      3,
+      4,
+      2,
+      2,
+      4,
+      4
+    ],
+    "warnings": [
+      "Số chỉ nhịp là gợi ý từ beat/downbeat, chưa được xác nhận. Các pulse đều không phân biệt chắc chắn n/4 với n/8; half/double-time và nhịp kép cần nghe đối chiếu.",
+      "Tempo thay đổi theo lưới beat đã phát hiện. BPM tổng quan là giá trị đại diện; MIDI ký âm và MusicXML giữ bản đồ tempo theo thời gian.",
+      "Có 1 khoảng beat gợi tempo ngoài 20–400 BPM; có thể thiếu/thừa marker, cần nghe kiểm tra.",
+      "Có 10 vị trí đổi số chỉ nhịp/nhóm phách được gợi ý. Đây cũng có thể là model đổi cách đếm hoặc bỏ sót downbeat; kiểm tra bản đồ từng ô trước khi chốt sheet.",
+      "Lưới có 4 khoảng downbeat chỉ chứa 1 beat và 10 lần đổi nhịp/nhóm phách. Đây có thể là đoạn nhịp phức tạp hoặc marker model sai; không coi bản đồ này là kết quả nhận diện đã xác nhận."
+    ],
+    "composer_meter_sequence_recovered": false,
+    "elapsed_seconds": 2.032,
+    "network_attempts": 0,
+    "additional_adtof_export_pipeline": {
+      "status": "completed",
+      "engine": "adtof",
+      "raw_hits": 78,
+      "score_hits": 78,
+      "tempo_mode": "detected_tempo_map",
+      "exported_bars": 18,
+      "files": {
+        "raw_midi": "raw.mid",
+        "score_midi": "score.mid",
+        "musicxml": "score.musicxml",
+        "preview_audio": "preview.wav"
+      },
+      "warnings": [
+        "Missing velocities use MIDI velocity 100 for playback only. Dynamics, ghost notes and accents are not inferred from this placeholder.",
+        "Some hits move by more than 50 ms on the chosen grid. Check BPM, first downbeat and subdivision against the original audio.",
+        "MuseScore was not found. Open score.musicxml in MuseScore to view, edit or export PDF.",
+        "Preview audio uses synthesized percussion at original hit times; it is not a separated drum recording.",
+        "The sheet and score MIDI follow the local beat, meter and tempo map. Small tempo fluctuations are hidden in MusicXML playback; only sustained changes receive visible tempo labels. Review inferred meter and groupings."
+      ],
+      "drum_accuracy_scored": false,
+      "elapsed_seconds": 2.408,
+      "network_attempts": 0
+    }
+  },
+  "limitations": [
+    "A published recording with programmed drums and real recorded instruments; not a benchmark of acoustic drum-kit recordings.",
+    "Composer supplies meter sequence and bar count, but no exact downbeat timestamps or reference BPM.",
+    "No ground-truth drum hit annotation; retaining 78 predicted events is export integrity, not recognition accuracy.",
+    "Direct local adapters and exporter were run; this evidence is not an HTTP/browser UI test.",
+    "The detected 18-bar map does not recover the composer-described 7-bar sequence."
+  ]
+}
