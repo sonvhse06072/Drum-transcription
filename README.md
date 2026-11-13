@@ -210,3 +210,10 @@ See [installation, provenance and limitations](docs/SHEETSAGE2.md).
 5/8, 7/8 and meter transitions has passed on real music. Compare against the
 known-composer [Room 34 reference](docs/REAL_MUSIC_VALIDATION.md) and annotated
 audio before deciding whether to change the default.
+
+**First real SheetSage2 check:** the published Room 34 test completed **offline** on CPU
+([GitHub Actions](https://github.com/sonvhse06072/Drum-transcription/actions/runs/43504035486)).
+It predicted **8 bars**, but the composer reference has **7 bars with different
+time signatures**; the model is not yet accurate on this case. See
+[report](docs/REAL_MUSIC_VALIDATION.md) before considering this experimental
+engine a replacement for Beat This!.

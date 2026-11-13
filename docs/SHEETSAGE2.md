@@ -79,3 +79,26 @@ supplied in the app is not silently substituted for the new model's prediction.
 - MPS is not currently validated for this adapter; use CPU or CUDA.
 
 See [Issue #2](https://github.com/sonvhse06072/Drum-transcription/issues/2).
+
+## Real Song Validation — Room 34, 14/11/2026
+
+The optional model has now been **executed with its actual official weights**
+on the same CC0 Room 34 OGG used to test Beat This!. On GitHub-hosted Linux,
+the explicit model setup succeeded; the test ran on CPU with Python socket and
+DNS calls blocked during inference (**zero network attempts**).
+
+- [Actual model run and JSON artifact](https://github.com/sonvhse06072/Drum-transcription/actions/runs/43504035486).
+- [Machine-readable baseline](validation/room34-sheetsage2.json).
+- Audio SHA-256: `93b965383f397943d7526c7a150f3beff80ca42b544432659889a99f4defa4eb`.
+- HF model commit: `5e9c494941b8c0bb322d9f17f365a6f886d5e562`.
+- Reference: 7 bars `6/8 → 7/8 → 2/4 → 2/4 → 7/8 → 9/8 → 5/16`.
+- Model: **8** bars, predicted `7/4 → 4/4 → 4/4 → 7/4 → 7/4 → 4/4 → 4/4 → 1/4`.
+- First predicted downbeat: **2.027 s**; representative BPM **179.75**.
+- Composer sequence exact match: **FALSE**. No ground-truth downbeat timestamp
+  annotations are available; do not report a timing precision or recall score.
+
+The result is **offline inference PASS; odd/mixed-meter quality FAIL**.
+Eight bars is numerically closer to seven than Beat This!'s 12 postprocessed bars
+but still a musically wrong transcription. Neither model should become the
+default for difficult mixed meter without further evaluation. Keep the manual
+boundary review as a fallback and preserve model provenance.
