@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling>=1.26,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "drum-transcription"
+version = "0.1.0"
+description = "Local audio-to-drum-sheet prototype with editable MusicXML"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.34,<1",
+  "python-multipart>=0.0.20,<1",
+  "pydantic>=2.10,<3",
+  "music21>=9.5,<10",
+  "mido>=1.3,<2",
+  "numpy>=1.26,<3",
+  "soundfile>=0.13,<1",
+]
+
+[project.optional-dependencies]
+adtof = [
+  "torch==2.8.0",
+  "adtof-pytorch @ git+https://github.com/xavriley/ADTOF-pytorch.git@85c192e78f716ea0b111cc8a5ee4a8f6a3a4f8a9",
+]
+adt-str = [
+  "torch==2.8.0", "torchaudio==2.8.0", "transformers>=4.57,<5",
+  "huggingface-hub>=0.34,<1", "safetensors>=0.6,<1", "omegaconf>=2.3,<3",
+  "pretty-midi>=0.2.10,<1",
+]
+demucs = ["demucs @ git+https://github.com/adefossez/demucs.git@829d21890023800713e5dd231c67e43ecc06069b"]
+dev = ["pytest>=8.3,<9", "httpx>=0.28,<1", "ruff>=0.11,<1"]
+
+[project.scripts]
+drum-transcription = "drum_transcription.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/drum_transcription"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]

@@ -1,0 +1,332 @@
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+const state = { health: null, file: null, job: null, timer: null, generation: 0, submitting: false };
+const statuses = { queued: "Đang chờ", running: "Đang xử lý", completed: "Hoàn tất", failed: "Có lỗi" };
+const instruments = {
+  kick: "Kick", snare: "Snare", tom_low: "Low tom", tom_mid: "Mid tom", tom_high: "High tom",
+  hihat_closed: "Hi-hat đóng", hihat_open: "Hi-hat mở", hihat_pedal: "Hi-hat chân",
+  crash: "Crash / cymbal", ride: "Ride", ride_bell: "Ride bell", china: "China", splash: "Splash",
+  side_stick: "Side stick", clap: "Clap", cowbell: "Cowbell", tambourine: "Tambourine",
+};
+const fileLabels = {
+  musicxml: ["MusicXML · mở trong MuseScore", true], pdf: ["PDF", false],
+  raw_midi: ["MIDI gốc", false], score_midi: ["MIDI theo sheet", false], events: ["Cú đánh · JSON", false],
+};
+
+function textElement(tag, text, className) {
+  const element = document.createElement(tag);
+  element.textContent = text;
+  if (className) element.className = className;
+  return element;
+}
+
+function announce(message) { $("live-status").textContent = message; }
+function showError(message) {
+  $("global-alert").textContent = message;
+  $("global-alert").hidden = !message;
+  if (message) announce(message);
+}
+
+function formatError(data, fallback) {
+  if (typeof data?.detail === "string") return data.detail;
+  if (Array.isArray(data?.detail)) return data.detail.map((item) => item.msg || String(item)).join(" · ");
+  return data?.error || data?.message || fallback;
+}
+
+async function api(path, options = {}) {
+  const response = await fetch(path, { cache: "no-store", ...options });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(formatError(data, `Máy chủ trả lỗi ${response.status}.`));
+  return data;
+}
+
+function chosenEngine() {
+  return state.health?.engines?.find((engine) => engine.id === $("engine").value);
+}
+
+function updateRunState() {
+  const busy = state.submitting || ["running", "queued"].includes(state.job?.status);
+  $("run-button").disabled = busy || !state.file || !chosenEngine()?.ready || !state.health?.ffmpeg;
+  $("demo-button").disabled = busy || !state.health;
+  $("rescore-button").disabled = busy || state.job?.status !== "completed";
+}
+
+function renderEngine() {
+  const engine = chosenEngine();
+  const adtof = $("engine").value === "adtof";
+  $("threshold-field").hidden = !adtof;
+  $("threshold").disabled = !adtof;
+  $("engine-description").textContent = engine?.detail || "Chưa xác định được trạng thái mô hình.";
+  let warning = "";
+  if (!engine?.ready) warning = "Mô hình chưa sẵn sàng. Cài thư viện và chuẩn bị trọng số local theo hướng dẫn, rồi bấm “Kiểm tra lại”. Bạn vẫn có thể thử mẫu ký âm.";
+  else if (adtof) warning = "ADTOF chỉ nhận diện 5 nhóm: kick, snare, tom, hi-hat và cymbal. Kết quả này chưa phân biệt đầy đủ tom, hi-hat mở/đóng hay crash/ride.";
+  else warning = "ADT_STR có nhiều nhãn nhạc cụ hơn; độ chính xác vẫn cần kiểm chứng trên nhạc của bạn. Một số kỹ thuật như ride bell, flam và sticking chưa được phân biệt.";
+  $("engine-alert").textContent = warning;
+  $("engine-alert").hidden = !warning;
+  updateRunState();
+}
+
+async function loadHealth() {
+  try {
+    state.health = await api("/api/health");
+    $("server-status").textContent = "Máy chủ local đã kết nối";
+    $("server-dot").className = "status-dot ready";
+    $("version").textContent = state.health.version ? `v${state.health.version}` : "";
+    const checks = [["FFmpeg", state.health.ffmpeg, "Sẵn sàng", "Chưa tìm thấy"], ["MuseScore / PDF", state.health.musescore, "Sẵn sàng", "Chưa cấu hình · vẫn xuất XML"]];
+    for (const engine of state.health.engines || []) checks.push([engine.label || engine.id, engine.ready, "Sẵn sàng", "Chưa sẵn sàng"]);
+    if (state.health.separation) {
+      checks.push(["Demucs / tách trống", state.health.separation.ready, "Sẵn sàng", "Chưa chuẩn bị"]);
+      $("separate-drums").disabled = !state.health.separation.ready;
+      if (!state.health.separation.ready) $("separate-drums").checked = false;
+      $("separate-drums").closest("label").title = state.health.separation.detail || "";
+    }
+    $("system-checks").replaceChildren(...checks.map(([name, ready, yes, no]) => {
+      const row = document.createElement("div"); row.className = "check-row";
+      row.append(textElement("span", name), textElement("span", ready ? yes : no, `check-state ${ready ? "ready" : "missing"}`));
+      return row;
+    }));
+    if (!state.health.ffmpeg) $("setup-help").open = true;
+    renderEngine();
+  } catch (error) {
+    state.health = null;
+    $("server-status").textContent = "Chưa kết nối được máy chủ local";
+    $("server-dot").className = "status-dot error";
+    $("engine-description").textContent = "Khởi động ứng dụng theo README rồi kiểm tra lại kết nối.";
+    updateRunState();
+    showError(error.message || "Không kết nối được máy chủ.");
+  }
+}
+
+function selectFile(file) {
+  state.file = file || null;
+  $("file-name").textContent = file?.name || "Chọn hoặc thả file nhạc vào đây";
+  $("file-meta").textContent = file ? `${(file.size / 1024 / 1024).toLocaleString("vi-VN", { maximumFractionDigits: 1 })} MB · file trên máy của bạn` : "WAV, MP3, FLAC, M4A và các định dạng FFmpeg hỗ trợ";
+  if (file && ["", "Drum transcription"].includes($("title").value)) $("title").value = file.name.replace(/\.[^.]+$/, "").slice(0, 120);
+  updateRunState();
+}
+
+function formOptions() {
+  return {
+    title: $("title").value.trim() || "Drum transcription", engine: $("engine").value,
+    bpm: Number($("bpm").value), meter: $("meter").value, subdivisions: Number($("subdivisions").value),
+    first_downbeat_seconds: Number($("downbeat").value), device: $("device").value,
+    threshold: Number($("threshold").value), clip_start_seconds: Number($("clip-start").value),
+    clip_duration_seconds: Number($("clip-duration").value), separate_drums: $("separate-drums").checked,
+  };
+}
+
+function safeFileUrl(value, jobId) {
+  if (typeof value !== "string" || !jobId) return null;
+  try {
+    const url = new URL(value, location.origin);
+    if (url.origin !== location.origin || !url.pathname.startsWith(`/api/jobs/${encodeURIComponent(jobId)}/files/`)) return null;
+    return url.pathname + url.search;
+  } catch { return null; }
+}
+
+function metric(value, label) {
+  const item = document.createElement("div"); item.className = "metric";
+  item.append(textElement("div", value, "metric-value"), textElement("div", label, "metric-label"));
+  return item;
+}
+
+function setWarnings(warnings) {
+  const unique = [...new Set((warnings || []).filter(Boolean))];
+  $("warnings-section").hidden = !unique.length;
+  $("warnings-title").textContent = `Lưu ý khi đọc kết quả${unique.length ? ` · ${unique.length}` : ""}`;
+  $("warnings-list").replaceChildren(...unique.map((warning) => textElement("li", warning)));
+}
+
+function renderOutputs(job) {
+  const files = job.files || {};
+  const links = [];
+  for (const [key, [label, primary]] of Object.entries(fileLabels)) {
+    const url = safeFileUrl(files[key], job.id);
+    if (!url) continue;
+    const link = document.createElement("a"); link.href = url; link.download = "";
+    link.className = `download-link${primary ? " primary" : ""}`;
+    link.append(textElement("span", "↓"), document.createTextNode(label)); links.push(link);
+  }
+  $("downloads").replaceChildren(...links);
+  const audioLabels = [["source_audio", "01 · Đoạn audio gốc"], ["drums_audio", "02 · Stem trống"], ["preview_audio", "03 · Cú đánh phát lại"]];
+  const audioCards = [];
+  for (const [key, label] of audioLabels) {
+    const url = safeFileUrl(files[key], job.id);
+    if (!url) continue;
+    const card = document.createElement("div"); card.className = "audio-card";
+    const player = document.createElement("audio"); player.controls = true; player.preload = "none"; player.src = url; player.setAttribute("aria-label", label);
+    player.addEventListener("play", () => { for (const other of document.querySelectorAll("audio")) if (other !== player) other.pause(); });
+    card.append(textElement("span", label, "audio-label"), player); audioCards.push(card);
+  }
+  $("audio-players").replaceChildren(...audioCards);
+  $("audio-note").hidden = !safeFileUrl(files.preview_audio, job.id);
+  const pdfUrl = safeFileUrl(files.pdf, job.id);
+  $("pdf-panel").hidden = !pdfUrl;
+  if (pdfUrl) $("pdf-preview").src = `${pdfUrl}#view=FitH`;
+  else $("pdf-preview").removeAttribute("src");
+  $("pdf-note").textContent = pdfUrl ? "PDF được khắc từ MusicXML. Dùng MusicXML để sửa ký âm trong MuseScore; MIDI gốc giữ thời điểm cú đánh trước khi đưa vào lưới nhịp." : "Mở MusicXML bằng MuseScore để xem và sửa bản nhạc. Xuất PDF tự động cần MuseScore được cài trên máy.";
+}
+
+function renderMetrics(job, events) {
+  const m = job.metrics || {};
+  const hits = events?.hits;
+  const hitCount = hits?.length ?? m.hits_count ?? m.hit_count ?? m.total_hits;
+  const seconds = events?.duration_seconds ?? m.duration_seconds;
+  const elapsed = m.elapsed_seconds ?? m.processing_seconds;
+  $("metrics").replaceChildren(
+    metric(hitCount == null ? "—" : hitCount.toLocaleString("vi-VN"), "Cú đánh gốc"),
+    metric(seconds == null ? "—" : `${Number(seconds).toFixed(1)} s`, "Độ dài đoạn"),
+    metric(job.options?.bpm ?? "—", "Tempo đã xác nhận"),
+    metric(elapsed == null ? (job.options?.meter || "—") : `${Number(elapsed).toFixed(1)} s`, elapsed == null ? "Số chỉ nhịp" : "Thời gian xử lý"),
+  );
+}
+
+async function loadEvents(job, generation) {
+  try {
+    const events = await api(`/api/jobs/${encodeURIComponent(job.id)}/events`);
+    if (generation !== state.generation) return;
+    const hits = events.hits || [];
+    const shown = hits.slice(0, 200);
+    $("event-count").textContent = hits.length > 200 ? `Hiển thị 200 / ${hits.length}` : `${hits.length} cú đánh`;
+    const counts = {};
+    for (const hit of hits) counts[hit.instrument] = (counts[hit.instrument] || 0) + 1;
+    $("instrument-counts").replaceChildren(...Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([name, count]) => {
+      const chip = textElement("span", instruments[name] || name, "instrument-count"); chip.append(textElement("strong", String(count))); return chip;
+    }));
+    $("events-body").replaceChildren(...shown.map((hit) => {
+      const row = document.createElement("tr");
+      const values = [`${Number(hit.time_seconds).toFixed(3)} s`, instruments[hit.instrument] || hit.instrument, hit.velocity == null ? "—" : String(hit.velocity), hit.confidence == null ? "—" : Number(hit.confidence).toFixed(3)];
+      row.append(...values.map((value) => textElement("td", value))); return row;
+    }));
+    if (!hits.length) {
+      const row = document.createElement("tr"); const cell = textElement("td", "Không có cú đánh được nhận diện trong đoạn này."); cell.colSpan = 4; row.append(cell); $("events-body").append(row);
+    }
+    renderMetrics(job, events);
+    setWarnings([...(job.warnings || []), ...(events.warnings || [])]);
+    if (events.engine === "demo" || events.engine === "synthetic") $("demo-notice").hidden = false;
+  } catch (error) {
+    if (generation !== state.generation) return;
+    $("event-count").textContent = "Chưa tải được dữ liệu cú đánh";
+    setWarnings([...(job.warnings || []), error.message]);
+  }
+}
+
+function renderJob(job) {
+  state.job = job;
+  $("empty-state").hidden = true;
+  $("job-badge").hidden = false;
+  $("job-badge").className = `badge ${Object.hasOwn(statuses, job.status) ? job.status : ""}`;
+  $("job-badge").textContent = statuses[job.status] || job.status;
+  $("result-subtitle").textContent = job.options?.title || job.title || "Kết quả xử lý";
+  $("job-progress").hidden = false;
+  const progress = Math.max(0, Math.min(100, Number(job.progress) || 0));
+  $("progress-bar").value = progress; $("progress-value").textContent = `${Math.round(progress)}%`;
+  $("stage-text").textContent = job.stage || statuses[job.status] || "Đang xử lý";
+  $("job-info").textContent = `Mã lần xử lý: ${job.id}`;
+  $("job-error").hidden = job.status !== "failed";
+  $("job-error").textContent = job.error || "Không hoàn tất xử lý. Kiểm tra mô hình và thông số rồi thử lại.";
+  $("result-content").hidden = job.status !== "completed";
+  if (job.status === "completed") {
+    $("job-progress").hidden = true;
+    const demo = job.kind === "demo" || job.engine === "demo" || job.options?.engine === "demo" || job.is_demo;
+    $("demo-notice").hidden = !demo;
+    const options = job.options || {};
+    $("rescore-bpm").value = options.bpm || 120;
+    $("rescore-meter").value = options.meter || "4/4";
+    $("rescore-grid").value = options.subdivisions || 4;
+    $("rescore-downbeat").value = options.first_downbeat_seconds || 0;
+    renderMetrics(job); renderOutputs(job); setWarnings(job.warnings);
+    $("events-body").replaceChildren(); $("instrument-counts").replaceChildren(); $("event-count").textContent = "Đang tải…";
+    loadEvents(job, state.generation);
+    announce("Đã tạo xong kết quả. Có thể nghe đối chiếu và tải bản nhạc.");
+  } else if (job.status === "failed") announce(job.error || "Xử lý gặp lỗi.");
+  updateRunState();
+}
+
+function selectJob(job) {
+  clearTimeout(state.timer); state.generation += 1;
+  renderJob(job);
+  if (["queued", "running"].includes(job.status)) schedulePoll(job.id, state.generation);
+}
+
+function schedulePoll(id, generation, failures = 0) {
+  state.timer = setTimeout(async () => {
+    if (generation !== state.generation) return;
+    try {
+      const job = await api(`/api/jobs/${encodeURIComponent(id)}`);
+      if (generation !== state.generation) return;
+      renderJob(job);
+      if (["queued", "running"].includes(job.status)) schedulePoll(id, generation);
+      else loadHistory();
+    } catch (error) {
+      if (generation !== state.generation) return;
+      if (failures < 4) schedulePoll(id, generation, failures + 1);
+      else { showError(`Mất kết nối khi đọc tiến độ. ${error.message} Bấm “Làm mới” ở danh sách xử lý để kiểm tra lại.`); }
+    }
+  }, failures ? 3000 : 1200);
+}
+
+async function loadHistory() {
+  try {
+    const data = await api("/api/jobs");
+    const jobs = Array.isArray(data) ? data : data.jobs || [];
+    $("history-panel").hidden = !jobs.length;
+    $("job-history").replaceChildren(...jobs.slice(0, 12).map((job) => {
+      const button = document.createElement("button"); button.type = "button"; button.className = "history-job";
+      const main = document.createElement("span"); main.className = "history-main";
+      const date = job.created_at ? new Date(job.created_at) : null;
+      const dateText = date && !Number.isNaN(date.getTime()) ? date.toLocaleString("vi-VN", { dateStyle: "short", timeStyle: "short" }) : job.id;
+      main.append(textElement("span", job.options?.title || job.title || job.id, "history-title"), textElement("span", dateText, "history-meta"));
+      button.append(main, textElement("span", statuses[job.status] || job.status, `badge ${Object.hasOwn(statuses, job.status) ? job.status : ""}`));
+      button.addEventListener("click", async () => {
+        showError("");
+        try { selectJob(await api(`/api/jobs/${encodeURIComponent(job.id)}`)); $("result-title").scrollIntoView({ behavior: "smooth", block: "start" }); }
+        catch (error) { showError(error.message); }
+      });
+      return button;
+    }));
+  } catch { /* Health shows connection failures; history is optional. */ }
+}
+
+$("transcribe-form").addEventListener("submit", async (event) => {
+  event.preventDefault(); showError("");
+  if (!state.file) { showError("Hãy chọn một file nhạc."); return; }
+  const options = formOptions();
+  if (options.first_downbeat_seconds >= options.clip_duration_seconds) { showError("Phách 1 phải nằm bên trong đoạn nhạc đã chọn."); $("downbeat").focus(); return; }
+  state.submitting = true; updateRunState();
+  try {
+    const form = new FormData(); form.append("file", state.file); form.append("options", JSON.stringify(options));
+    selectJob(await api("/api/jobs", { method: "POST", body: form })); loadHistory();
+  } catch (error) { showError(error.message); }
+  finally { state.submitting = false; updateRunState(); }
+});
+
+$("demo-button").addEventListener("click", async () => {
+  showError(""); state.submitting = true; updateRunState();
+  try { selectJob(await api("/api/demo", { method: "POST" })); loadHistory(); }
+  catch (error) { showError(error.message); }
+  finally { state.submitting = false; updateRunState(); }
+});
+
+$("rescore-form").addEventListener("submit", async (event) => {
+  event.preventDefault(); if (!state.job) return; showError("");
+  const options = { title: state.job.options?.title || "Drum transcription", bpm: Number($("rescore-bpm").value), meter: $("rescore-meter").value, subdivisions: Number($("rescore-grid").value), first_downbeat_seconds: Number($("rescore-downbeat").value) };
+  state.submitting = true; updateRunState();
+  try { selectJob(await api(`/api/jobs/${encodeURIComponent(state.job.id)}/rescore`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(options) })); }
+  catch (error) { showError(error.message); }
+  finally { state.submitting = false; updateRunState(); }
+});
+
+$("audio-file").addEventListener("change", (event) => selectFile(event.target.files[0]));
+$("engine").addEventListener("change", renderEngine);
+$("refresh-health").addEventListener("click", () => { showError(""); loadHealth(); });
+$("refresh-jobs").addEventListener("click", loadHistory);
+for (const type of ["dragenter", "dragover"]) $("drop-zone").addEventListener(type, (event) => { event.preventDefault(); $("drop-zone").classList.add("dragover"); });
+for (const type of ["dragleave", "drop"]) $("drop-zone").addEventListener(type, (event) => { event.preventDefault(); $("drop-zone").classList.remove("dragover"); });
+$("drop-zone").addEventListener("drop", (event) => {
+  const file = event.dataTransfer?.files[0];
+  if (file) { $("audio-file").files = event.dataTransfer.files; selectFile(file); }
+});
+
+Promise.allSettled([loadHealth(), loadHistory()]);
