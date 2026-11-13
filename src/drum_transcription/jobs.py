@@ -256,6 +256,7 @@ class JobManager:
             from .engines import transcribe
             from .notation import export_score
             from .rhythm import analyze_rhythm, write_rhythm_preview
+            from .rhythm_sheetsage2 import analyze_meter_rhythm
 
             job = self.get(job_id)
             directory = self.directory(job_id)
@@ -288,10 +289,15 @@ class JobManager:
                 if options.rhythm_mode == "auto":
                     self.update(
                         job_id,
-                        stage="Tự nhận diện tempo và phách 1 bằng Beat This! local",
+                        stage=f"Tự nhận diện tempo và phách 1 bằng {options.rhythm_engine} local",
                         progress=15,
                     )
-                    active_rhythm = analyze_rhythm(
+                    analyzer = (
+                        analyze_meter_rhythm
+                        if options.rhythm_engine == "sheetsage2_refined"
+                        else analyze_rhythm
+                    )
+                    active_rhythm = analyzer(
                         directory / "source.wav",
                         self.settings.models_dir,
                         device=options.device,

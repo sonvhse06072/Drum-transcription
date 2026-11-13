@@ -51,7 +51,8 @@ function chosenEngine() {
 
 function updateRunState() {
   const busy = state.submitting || ["running", "queued"].includes(state.job?.status);
-  const timingReady = $("rhythm-mode").value === "manual" || state.health?.rhythm?.ready;
+  const chosenRhythm = state.health?.rhythm_engines?.find((item) => item.id === $("rhythm-engine").value);
+  const timingReady = $("rhythm-mode").value === "manual" || (chosenRhythm ? chosenRhythm.ready : ($("rhythm-engine").value === "beat_this" && state.health?.rhythm?.ready));
   $("run-button").disabled = busy || !state.file || !chosenEngine()?.ready || !state.health?.ffmpeg || !timingReady;
   $("demo-button").disabled = busy || !state.health;
   $("rescore-button").disabled = busy || state.job?.status !== "completed";
@@ -82,6 +83,8 @@ function populateMeterChoices() {
 function renderTimingMode() {
   const manual = $("rhythm-mode").value === "manual";
   $("manual-timing-fields").hidden = !manual;
+  $("rhythm-engine-field").hidden = manual;
+  $("rhythm-engine").disabled = manual;
   $("auto-timing-help").hidden = manual;
   for (const id of ["bpm", "downbeat"]) {
     $(id).disabled = !manual;
@@ -91,10 +94,13 @@ function renderTimingMode() {
   $("meter-hint").textContent = manual ? "bắt buộc" : "tuỳ chọn";
   $("auto-meter-option").textContent = manual ? "Chọn số chỉ nhịp" : "Tự nhận diện";
   $("meter-help").hidden = manual;
-  const missing = !manual && state.health && !state.health.rhythm?.ready;
+  const rhythm = state.health?.rhythm_engines?.find((item) => item.id === $("rhythm-engine").value)
+    || ($("rhythm-engine").value === "beat_this" ? state.health?.rhythm : null);
+  $("rhythm-engine-help").textContent = rhythm?.detail || "SheetSage2-Refined cần cài model/head riêng; weights chỉ dùng phi thương mại.";
+  const missing = !manual && state.health && !rhythm?.ready;
   $("rhythm-alert").hidden = !missing;
   $("rhythm-alert").textContent = missing
-    ? "Chưa có model nhận diện nhịp. Chuẩn bị Beat This! trong mục “Kiểm tra môi trường local”, rồi bấm “Kiểm tra lại”. Tempo và phách 1 sẽ được dò từ audio khi model sẵn sàng."
+    ? (rhythm?.detail || "Chưa chuẩn bị model nhận diện nhịp đã chọn. Xem hướng dẫn setup-models ở README.")
     : "";
   updateRunState();
 }
@@ -122,7 +128,9 @@ async function loadHealth() {
     $("version").textContent = state.health.version ? `v${state.health.version}` : "";
     const checks = [["FFmpeg", state.health.ffmpeg, "Sẵn sàng", "Chưa tìm thấy"], ["MuseScore / PDF", state.health.musescore, "Sẵn sàng", "Chưa cấu hình · vẫn xuất XML"]];
     for (const engine of state.health.engines || []) checks.push([engine.label || engine.id, engine.ready, "Sẵn sàng", "Chưa sẵn sàng"]);
-    checks.push(["Beat This! / tempo & phách 1", state.health.rhythm?.ready, "Sẵn sàng", "Chưa chuẩn bị"]);
+    for (const rhythm of state.health.rhythm_engines || [{id:"beat_this",label:"Beat This!",ready:state.health.rhythm?.ready}]) {
+      checks.push([rhythm.label || rhythm.id, rhythm.ready, "Sẵn sàng", "Chưa chuẩn bị"]);
+    }
     if (state.health.separation) {
       checks.push(["Demucs / tách trống", state.health.separation.ready, "Sẵn sàng", "Chưa chuẩn bị"]);
       $("separate-drums").disabled = !state.health.separation.ready;
@@ -134,7 +142,7 @@ async function loadHealth() {
       row.append(textElement("span", name), textElement("span", ready ? yes : no, `check-state ${ready ? "ready" : "missing"}`));
       return row;
     }));
-    if (!state.health.ffmpeg || !state.health.rhythm?.ready) $("setup-help").open = true;
+    if (!state.health.ffmpeg || !state.health.rhythm_engines?.find((item) => item.id === $("rhythm-engine").value)?.ready) $("setup-help").open = true;
     renderTimingMode();
     renderEngine();
   } catch (error) {
@@ -161,6 +169,7 @@ function formOptions() {
   return {
     title: $("title").value.trim() || "Drum transcription", engine: $("engine").value,
     rhythm_mode: manual ? "manual" : "auto",
+    rhythm_engine: $("rhythm-engine").value,
     bpm: manual ? Number($("bpm").value) : null, meter: $("meter").value || null, subdivisions: Number($("subdivisions").value),
     first_downbeat_seconds: manual ? Number($("downbeat").value) : null, device: $("device").value,
     threshold: Number($("threshold").value), clip_start_seconds: Number($("clip-start").value),
@@ -596,6 +605,7 @@ $("barline-rescore-form").addEventListener("submit", async (event) => {
 $("audio-file").addEventListener("change", (event) => selectFile(event.target.files[0]));
 $("engine").addEventListener("change", renderEngine);
 $("rhythm-mode").addEventListener("change", renderTimingMode);
+$("rhythm-engine").addEventListener("change", renderTimingMode);
 $("refresh-health").addEventListener("click", () => { showError(""); loadHealth(); });
 $("refresh-jobs").addEventListener("click", loadHistory);
 for (const type of ["dragenter", "dragover"]) $("drop-zone").addEventListener(type, (event) => { event.preventDefault(); $("drop-zone").classList.add("dragover"); });

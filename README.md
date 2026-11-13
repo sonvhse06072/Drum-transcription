@@ -181,3 +181,39 @@ postprocessor reduced Room 34 from 18 to 12 candidate bars, but the composer
 specified 7. The automatic odd-meter result remains **NOT ACCEPTED**, even
 though the export and unit tests run. This is why barline editing is offered
 as a fallback, not counted as automatic recognition accuracy.
+
+
+## New (v0.5): optional SheetSage2-Refined for odd/changing meters
+
+Beat This! is still the default. For an **experimental** rhythm engine that
+predicts a time signature for each bar, install the code and prepare the
+non-commercial weights explicitly:
+
+```bash
+python -m pip install -e '.[adtof,meter-aware]'
+drum-transcription setup-models sheetsage2_refined
+drum-transcription doctor
+drum-transcription serve
+```
+
+Select **SheetSage2-Refined · nhịp lẻ (thử nghiệm)** in
+**Tempo & phách đầu → Mô hình nhận diện nhịp**. Choose the drum model separately
+(ADTOF or ADT_STR). The user does **not** enter BPM or a downbeat by default.
+
+The model is local-only during inference. The one-time setup resolves the
+publisher's weight revision and stores only the encoder and bar head artifacts,
+with checksums. The model weights are **CC BY-NC 4.0**, so this feature is
+intended for personal/non-commercial research until a separate license review.
+See [installation, provenance and limitations](docs/SHEETSAGE2.md).
+
+**Note:** integration passing tests does not mean automatic recognition of
+5/8, 7/8 and meter transitions has passed on real music. Compare against the
+known-composer [Room 34 reference](docs/REAL_MUSIC_VALIDATION.md) and annotated
+audio before deciding whether to change the default.
+
+**First real SheetSage2 check:** the published Room 34 test completed **offline** on CPU
+([GitHub Actions](https://github.com/sonvhse06072/Drum-transcription/actions/runs/43504035486)).
+It predicted **8 bars**, but the composer reference has **7 bars with different
+time signatures**; the model is not yet accurate on this case. See
+[report](docs/REAL_MUSIC_VALIDATION.md) before considering this experimental
+engine a replacement for Beat This!.

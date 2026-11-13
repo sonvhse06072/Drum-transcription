@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-14",
+  "model": "sheetsage2_refined",
+  "app_source_pr": 3,
+  "evaluation_run": "https://github.com/sonvhse06072/Drum-transcription/actions/runs/43504035486",
+  "audio": {
+    "source": "Room 34 CC0 original OGG from Wikimedia Commons",
+    "sha256": "93b965383f397943d7526c7a150f3beff80ca42b544432659889a99f4defa4eb"
+  },
+  "model_provenance": {
+    "source_revision": "6b966e2e495b51024753c29b4bef8fa82935b51a",
+    "hf_revision": "5e9c494941b8c0bb322d9f17f365a6f886d5e562",
+    "encoder_weights_sha256": "68ea331558421117c5cdffe7f26c80ed1296fca3780508b7262810915e90ff26",
+    "head_sha256": "52e60b821924a3100ffd523c12d5851dd445f1f92356da4ed6c969daf5f3ab07",
+    "license": "CC BY-NC 4.0"
+  },
+  "execution": {
+    "status": "completed",
+    "device": "cpu",
+    "network_attempts": 0,
+    "inference": "real pretrained encoder and bar head"
+  },
+  "reference": {
+    "bar_count": 7,
+    "meters": [
+      "6/8",
+      "7/8",
+      "2/4",
+      "2/4",
+      "7/8",
+      "9/8",
+      "5/16"
+    ],
+    "barline_timestamps": null
+  },
+  "prediction": {
+    "bar_count": 8,
+    "meters": [
+      "7/4",
+      "4/4",
+      "4/4",
+      "7/4",
+      "7/4",
+      "4/4",
+      "4/4",
+      "1/4"
+    ],
+    "starts_seconds": [
+      2.027,
+      4.3595,
+      5.6968,
+      7.0277,
+      9.3625,
+      11.6882,
+      13.0244,
+      14.3583
+    ],
+    "first_downbeat_seconds": 2.027,
+    "representative_bpm": 179.74835230677047
+  },
+  "composer_meter_sequence_recovered": false,
+  "quality_status": "fail",
+  "note": "Barline timing precision/recall cannot be scored: source provides no ground-truth bar timestamps."
+}

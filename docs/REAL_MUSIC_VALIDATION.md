@@ -85,3 +85,21 @@ candidate is [SheetSage2-Refined](https://github.com/anime-song/SheetSage2-Refin
 with its beat/bar head, but its weights are CC BY-NC 4.0 and it has **not**
 been integrated or validated on this project. Its benchmark claims must be
 reproduced before adoption.
+
+## SheetSage2-Refined follow-up (14/11/2026)
+
+A separate opt-in local model was integrated with its frozen encoder and
+beat/bar head (no whole-song SheetSage decoder). [Real offline model run](https://github.com/sonvhse06072/Drum-transcription/actions/runs/43504035486)
+and [machine-readable report](validation/room34-sheetsage2.json):
+
+- Same verified Room 34 original OGG SHA-256 and the composer 7-bar reference.
+- Actual SheetSage2 result: **8 bars** with signatures
+  `7/4, 4/4, 4/4, 7/4, 7/4, 4/4, 4/4, 1/4`; first downbeat at 2.027 seconds.
+- No external connection attempts during the inference run.
+- **Quality NOT ACCEPTED**. The model starts the first bar later and does
+  not recover any matching signature sequence. Fewer bars than Beat This!
+  does not constitute recognition accuracy.
+
+The optional adapter remains opt-in; Beat This! remains the default. Model
+weights are CC BY-NC 4.0. The report contains source hashes and the exact HF
+model revision for reproducibility; no audio or weights are committed.

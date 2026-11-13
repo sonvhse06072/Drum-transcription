@@ -61,6 +61,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def health():
         from .engines import get_engine_status
         from .rhythm import rhythm_status
+        from .rhythm_sheetsage2 import meter_status
 
         return {
             "version": __version__,
@@ -70,6 +71,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "musescore": settings.musescore is not None,
             "separation": separation_status(settings.models_dir),
             "rhythm": rhythm_status(settings.models_dir),
+            "rhythm_engines": [
+                {"id": "beat_this", "label": "Beat This! · mặc định", **rhythm_status(settings.models_dir)},
+                meter_status(settings.models_dir),
+            ],
         }
 
     @app.get("/api/jobs")
@@ -87,6 +92,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def create_job(request: Request, file: UploadFile = File(...), options: str = Form(...)):
         from .engines import get_engine_status
         from .rhythm import rhythm_status
+        from .rhythm_sheetsage2 import meter_status
 
         try:
             parsed = JobOptions.model_validate_json(options)
@@ -106,7 +112,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not status or not status["ready"]:
             raise HTTPException(409, status["detail"] if status else "Model chưa sẵn sàng.")
         if parsed.rhythm_mode == "auto":
-            rhythm = rhythm_status(settings.models_dir)
+            rhythm = (
+                rhythm_status(settings.models_dir)
+                if parsed.rhythm_engine == "beat_this"
+                else meter_status(settings.models_dir)
+            )
             if not rhythm["ready"]:
                 raise HTTPException(409, rhythm["detail"])
         if settings.ffmpeg is None:
