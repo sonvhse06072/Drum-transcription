@@ -156,3 +156,28 @@ src/drum_transcription/
 ```
 
 `data/`, `models/`, audio người dùng và kết quả không được commit. Biến môi trường `DRUM_DATA_DIR`, `DRUM_MODELS_DIR`, `FFMPEG_BIN`, `MUSESCORE_BIN` cho phép đổi đường dẫn; xem [.env.example](.env.example). Không tự nạp `.env`: đặt biến trong terminal trước khi chạy.
+
+
+## V0.4: mixed-meter review when the model misses barlines
+
+Beat This! remains the automatic default. On a result with a wrong bar count,
+expand **Chỉnh số chỉ nhịp và ranh giới ô nhịp** and use the second, advanced
+form. Enter **N+1 semicolon-separated barline timestamps** for **N meter labels**
+relative to the decoded clip (fractional seconds allowed). Example:
+
+```text
+Barlines: 0.371; 2.371; 3.871; 5.121
+Meters:   4/4; 3/4; 5/8
+```
+
+This creates a clearly labeled **manual correction**, retaining original model
+beat/downbeat evidence and every raw drum event. The initial automatically
+detected map is never overwritten. A short 5/16 bar can use fractional boundaries
+between beat markers. The first and last user boundaries must cover the detected
+audio region; invalid/overlapping marks are rejected.
+
+[Real-recording benchmark](docs/REAL_MUSIC_VALIDATION.md): the new model-score
+postprocessor reduced Room 34 from 18 to 12 candidate bars, but the composer
+specified 7. The automatic odd-meter result remains **NOT ACCEPTED**, even
+though the export and unit tests run. This is why barline editing is offered
+as a fallback, not counted as automatic recognition accuracy.

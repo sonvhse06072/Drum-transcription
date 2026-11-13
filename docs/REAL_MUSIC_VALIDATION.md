@@ -59,3 +59,29 @@ Khi thay bộ phát hiện hoặc bộ giải mã nhịp, dùng cùng input hash
 [Trang tác giả trên ccMixter](https://ccmixter.org/files/Quarkstar/56030) ghi bản dài 4:28, 120 BPM, có trống/bass/synth/giọng hát SackJo22 và chuyển **4/4 → 6/4 ở đoạn break giữa bài**, theo giấy phép **CC BY-NC-SA 3.0**. Tác giả chưa ghi timestamp chuyển cụ thể.
 
 Player/API công khai cung cấp [MP3](https://ccmixter.org/content/Quarkstar/Quarkstar_-_The_Boy_Loves.mp3), nhưng yêu cầu tải trong môi trường kiểm tra nhận HTTP 403. Không tìm được endpoint chính thức khác giải quyết lỗi; chưa có audio local và **chưa chạy app trên bài này**. Trang bài hát vẫn dùng được làm liên kết nghe và nguồn xác nhận có đổi nhịp. Chưa suy ra mốc chuyển từ dự đoán của model hoặc từ vị trí giữa file.
+
+## Follow-up — global Viterbi decoder, 14/11/2026
+
+A reproducible GitHub Actions job ran the same SHA-256-pinned original OGG and
+official Beat This! `final0` checkpoint, comparing raw peaks and the new
+frame-logit-constrained Viterbi decoder in one offline inference pass.
+
+- [Real-music evaluation run](https://github.com/sonvhse06072/Drum-transcription/actions/runs/43489999607)
+- **Before:** 18 detected bars.
+- **After:** 12 inferred bars, 6 weak raw downbeat markers skipped.
+- **Composer reference:** 7 bars, 6/8 → 7/8 → 2/4 → 2/4 → 7/8 → 9/8 → 5/16.
+- **Result:** NOT ACCEPTED for automatic odd/mixed meter. The new bar map
+  still mislabels the meter, mostly as 2/4, 4/4 and 5/4.
+
+The test artifact stores the new and old sequences, detector status, SHA-256,
+and non-network inference evidence. Improvement in bar count is **not** correct
+meter recognition. The revised app also offers explicit user-corrected bar
+boundaries after automatic inference; those corrections are labeled manual and
+do not modify raw audio or hit timestamps.
+
+The next model comparison should use a dedicated meter-aware local model on
+held-out annotated songs (not only this one recording). A promising research
+candidate is [SheetSage2-Refined](https://github.com/anime-song/SheetSage2-Refined)
+with its beat/bar head, but its weights are CC BY-NC 4.0 and it has **not**
+been integrated or validated on this project. Its benchmark claims must be
+reproduced before adoption.

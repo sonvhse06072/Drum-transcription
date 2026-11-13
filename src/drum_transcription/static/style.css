@@ -1354,3 +1354,18 @@ footer {
     scroll-behavior:auto!important;
   }
 }
+
+/* Manual barline editor uses local timestamps; keep both input lists readable. */
+.bar-editor textarea {
+  display: block;
+  width: 100%;
+  min-height: 72px;
+  border: 1px solid #cbd6ce;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  padding: 10px 11px;
+  font: inherit;
+  resize: vertical;
+}
+.bar-editor textarea:focus-visible { outline: 3px solid #56a888; outline-offset: 2px; }
