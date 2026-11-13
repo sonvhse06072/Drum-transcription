@@ -34,6 +34,8 @@ def _relative_model_path(value: str) -> Path:
     if not isinstance(value, str) or not value:
         raise ValueError("SheetSage2 model config has a missing artifact path.")
     path = Path(value)
+    if value.startswith(("./", ".\\")):
+        raise ValueError("Unsafe SheetSage2 model artifact path.")
     if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
         raise ValueError("Unsafe SheetSage2 model artifact path.")
     if path.suffix != ".safetensors":

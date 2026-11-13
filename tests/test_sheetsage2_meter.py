@@ -1,9 +1,7 @@
 """SheetSage2 beat/bar-head adapter: offline, precise timing and meter provenance."""
 
 import json
-from pathlib import Path
 
-import numpy as np
 import pytest
 from pydantic import ValidationError
 
@@ -98,7 +96,6 @@ def test_missing_model_does_not_download_or_assume_ready(tmp_path, monkeypatch):
 
 
 def test_local_model_artifacts_are_required_not_replaced_by_random_weights(tmp_path):
-    import importlib.util
 
     target = tmp_path / "sheetsage2_refined"
     target.mkdir()
