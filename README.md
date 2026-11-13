@@ -31,11 +31,11 @@ Trên Ubuntu/WSL, cài FFmpeg bằng `sudo apt install ffmpeg`. Trên Windows Po
 ADTOF cần PyTorch. Nếu chỉ thử CPU và muốn tránh tải các gói CUDA lớn, **cài PyTorch CPU trước lệnh cài extra adtof**:
 
 ```bash
-python -m pip install 'torch==2.8.0' --index-url https://download.pytorch.org/whl/cpu
+python -m pip install 'torch==2.8.0' 'torchaudio==2.8.0' --index-url https://download.pytorch.org/whl/cpu
 python -m pip install -e '.[adtof]'
 ```
 
-Nếu có NVIDIA GPU, dùng bản PyTorch phù hợp với driver/CUDA của máy từ [hướng dẫn chính thức](https://pytorch.org/get-started/locally/). Trong app chọn `auto` hoặc `cuda`; không tự chuyển sang API cloud khi GPU thiếu bộ nhớ.
+Nếu có NVIDIA GPU, cài cặp **PyTorch/TorchAudio 2.8.0 cùng build CUDA**, phù hợp driver của máy, theo [hướng dẫn phiên bản chính thức](https://pytorch.org/get-started/previous-versions/). Tránh trộn Torch CPU với TorchAudio CUDA vì có thể thiếu thư viện khi import. Trong app chọn `auto` hoặc `cuda`; không tự chuyển sang API cloud khi GPU thiếu bộ nhớ.
 
 ### Chưa cài AI: kiểm tra giao diện và sheet trước
 
@@ -94,6 +94,7 @@ Xem [cài model, phiên bản pin và giới hạn giấy phép](docs/MODELS.md)
 
 ```bash
 # Engine nhiều lớp hơn; dung lượng lớn hơn baseline.
+# CPU: cài cặp torch/torchaudio CPU như hướng dẫn phía trên trước bước này.
 python -m pip install -e '.[adt-str]'
 drum-transcription setup-models adt_str
 

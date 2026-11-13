@@ -52,9 +52,16 @@ representative benchmark.
 This engine is heavier. Start with a 10–30-second clip, especially on CPU:
 
 ```bash
+# CPU only: install matching CPU builds before the extra.
+python -m pip install 'torch==2.8.0' 'torchaudio==2.8.0' --index-url https://download.pytorch.org/whl/cpu
 python -m pip install -e '.[adt-str]'
 drum-transcription setup-models adt_str --models-dir ./models
 ```
+
+For NVIDIA GPU use matching Torch/TorchAudio 2.8.0 CUDA builds instead of the CPU
+index command. Mixing a CPU Torch installation with a CUDA TorchAudio wheel can
+fail to import due to missing shared libraries; the two packages must use the
+same device build.
 
 Explicit setup downloads:
 
