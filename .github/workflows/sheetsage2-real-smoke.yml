@@ -1,0 +1,46 @@
+name: SheetSage2 optional real-model smoke
+
+on:
+  push:
+    branches: ["feat/sheetsage2-meter-local"]
+    paths:
+      - ".github/workflows/sheetsage2-real-smoke.yml"
+      - "scripts/validate_sheetsage2_room34.py"
+      - "src/drum_transcription/rhythm_sheetsage2.py"
+  workflow_dispatch:
+
+jobs:
+  offline-room34:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install CPU build and meter-head only
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e ".[meter-aware]"
+      - name: Explicitly prepare published weights while online
+        run: drum-transcription setup-models sheetsage2_refined
+      - name: Download benchmark audio and verify SHA
+        run: |
+          mkdir -p data/real-music/room34
+          curl -fL --retry 2 --connect-timeout 30 -o data/real-music/room34/song.ogg \
+            "https://upload.wikimedia.org/wikipedia/commons/b/b6/Room_34_-_24_-_The_Fall_of_the_Village_of_the_Infinitesimal_Forest_at_the_Hands_of_the_Royal_Aggressor_An_Epic_in_Seven_Parts.ogg"
+          echo "93b965383f397943d7526c7a150f3beff80ca42b544432659889a99f4defa4eb  data/real-music/room34/song.ogg" | sha256sum -c
+      - name: Measure actual offline meter-aware predictions
+        run: |
+          OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 python scripts/validate_sheetsage2_room34.py \
+            --audio data/real-music/room34/song.ogg \
+            --models-dir models \
+            --out data/real-music/room34/sheetsage2-report.json
+      - name: Save diagnostics, not audio or weights
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sheetsage2-room34-diagnostics
+          path: data/real-music/room34/sheetsage2-report.json
+          if-no-files-found: ignore
