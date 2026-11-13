@@ -187,3 +187,11 @@ do not assume the checkpoint inherits the code's license. See
 The tests cover missing-file failure, strict-loading calls, semantic mapping and
 network-free readiness. A true quality benchmark requires representative audio
 with manually checked drum events; synthetic demo output is not that benchmark.
+
+## SheetSage2-Refined — opt-in meter-aware rhythm engine
+
+Install `.[meter-aware]` and explicitly run `drum-transcription setup-models sheetsage2_refined` once. The app uses only the publisher's pretrained **encoder and beat/bar head**; it does not run the full melody/chord decoder. The source commit is pinned; setup resolves and stores an immutable Hugging Face SHA and hashes of the config/weights/head. After setup, inference only uses local paths.
+
+**Model weights: CC BY-NC 4.0 (non-commercial)**. The upstream implementation code is MIT. Neither the weights nor the source have been copied into this repository. This model is heavier than Beat This! and may require a GPU or substantial memory. Missing files produce an error, never a network request or dummy result.
+
+See [SHEETSAGE2.md](SHEETSAGE2.md) for the installation, inference adapter and limitations.
