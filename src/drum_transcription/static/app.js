@@ -256,10 +256,11 @@ function renderBarMap(job, rhythm) {
     const bpm = barTempo(bar);
     const estimated = bar.estimated !== false;
     const tail = bar.source === "extrapolated" || Number(bar.end_seconds) > Number(job.metrics?.duration_seconds) + 0.001;
-    const source = bar.source === "user" ? `Đã chỉnh${tail ? " · đuôi dự kiến" : ""}` : tail ? "Đuôi dự kiến" : estimated ? "Ước lượng" : "Đã lưu";
+    const isUser = bar.source === "user" || bar.source === "user_boundary";
+    const source = isUser ? `Đã chỉnh${tail ? " · đuôi dự kiến" : ""}` : tail ? "Đuôi dự kiến" : estimated ? "Ước lượng" : "Đã lưu";
     const values = [String(index + 1), `${formatSeconds(bar.start_seconds)} – ${formatSeconds(bar.end_seconds)}`, bar.meter, bar.grouping?.length ? bar.grouping.join("+") : "—", bpm == null ? "—" : bpm.toLocaleString("vi-VN", { maximumFractionDigits: 1 })];
     row.append(...values.map((value) => textElement("td", value)));
-    const status = document.createElement("td"); status.append(textElement("span", source, `bar-source ${bar.source === "user" ? "user" : "estimated"}`)); row.append(status);
+    const status = document.createElement("td"); status.append(textElement("span", source, `bar-source ${isUser ? "user" : "estimated"}`)); row.append(status);
     return row;
   }));
   updateRunState();
@@ -273,7 +274,7 @@ function renderRhythm(job, eventRhythm) {
   const downbeat = options.first_downbeat_seconds ?? job.metrics?.first_downbeat_seconds;
   const original = demo ? null : (job.metrics?.first_downbeat_original_seconds ?? (downbeat == null ? null : Number(downbeat) + Number(job.options?.clip_start_seconds ?? 0)));
   $("rhythm-result").hidden = false;
-  $("rhythm-source").textContent = demo ? "Dữ liệu mẫu" : job.kind === "rhythm_rescore" ? "Phách tự động · ký âm đã chỉnh" : auto ? "Tự nhận diện" : job.options?.rhythm_mode === "manual" ? "Nhập thủ công" : "Thông số đã lưu";
+  $("rhythm-source").textContent = demo ? "Dữ liệu mẫu" : job.kind === "rhythm_rescore" ? "Bản đồ đã hiệu chỉnh" : auto ? "Tự nhận diện" : job.options?.rhythm_mode === "manual" ? "Nhập thủ công" : "Thông số đã lưu";
   $("tempo-label").textContent = auto ? "Tempo trung vị · ♩ = BPM" : "Tempo cố định · ♩ = BPM";
   $("detected-bpm").textContent = options.bpm == null ? "—" : Number(options.bpm).toLocaleString("vi-VN", { maximumFractionDigits: 2 });
   const sequence = auto ? meterSequence(rhythm?.bars || []) : [];
@@ -572,7 +573,7 @@ $("barline-rescore-form").addEventListener("submit", async (event) => {
   const rawTimes = $("barlines-seconds").value.split(";").map((part) => part.trim()).filter(Boolean);
   const barline_seconds = rawTimes.map(Number);
   const barline_meters = $("barlines-meters").value.split(";").map((part) => part.trim()).filter(Boolean);
-  if (rawTimes.some((part) => !/^(?:\\d+(?:\\.\\d+)?|\\.\\d+)$/.test(part)) ||
+  if (rawTimes.some((part) => !/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(part)) ||
       barline_seconds.some((value) => !Number.isFinite(value) || value < 0) ||
       barline_seconds.length !== barline_meters.length + 1 || barline_meters.length < 1) {
     showBarError("Cần N+1 mốc giây hợp lệ cho N số chỉ nhịp, ngăn bằng dấu chấm phẩy."); return;

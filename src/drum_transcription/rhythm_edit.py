@@ -28,7 +28,7 @@ def apply_explicit_barlines(
             "Bản đồ mới phải bắt đầu trong clip và kết thúc sau beat cuối phát hiện. "
             "Kiểm tra các mốc trong clip, không dùng thời gian của file nhạc gốc."
         )
-    if boundaries[-1] > analysis.bars[-1].end_seconds + 5 if analysis.bars else False:
+    if analysis.bars and boundaries[-1] > analysis.bars[-1].end_seconds + 5:
         raise ValueError("Ranh giới cuối nằm quá xa vùng audio đã phân tích.")
 
     # A boundary can be between detected beats (e.g. 5/16). Nearby model

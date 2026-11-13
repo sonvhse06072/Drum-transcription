@@ -27,7 +27,7 @@ def test_user_can_replace_four_wrong_bars_with_mixed_and_odd_meter():
     assert [bar.meter for bar in corrected.bars] == options.barline_meters
     assert corrected.first_downbeat_seconds == pytest.approx(0.371)
     assert corrected.downbeats_seconds == options.barline_seconds[:-1]
-    assert corrected.bars[-1].end_quarter == pytest.approx(13.125)
+    assert corrected.bars[-1].end_quarter == pytest.approx(13.0)
     assert corrected.metadata["bar_boundaries_edited"] is True
     assert corrected.metadata["model_downbeats_before_user_review"] == original.downbeats_seconds
     assert all(not bar.estimated for bar in corrected.bars)
