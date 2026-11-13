@@ -2,7 +2,7 @@
 
 Ứng dụng chạy trên PC để kiểm chứng chất lượng **audio → sự kiện trống → MIDI → MusicXML → PDF**. Suy luận AI chạy local; không gửi bản nhạc đến dịch vụ/API bên ngoài. Tải dependency/model là bước cài đặt riêng có chủ đích.
 
-> Phiên bản 0.2 tự nhận diện tempo và phách 1 bằng model local. Chưa cam kết nhận diện đầy đủ mọi kỹ thuật trống. Demo chỉ kiểm tra ký âm, không đại diện độ chính xác AI.
+> Phiên bản 0.3 thêm bản đồ số chỉ nhịp theo từng ô, nhóm phách lẻ và tempo thay đổi. Tempo/phách 1 vẫn tự nhận diện bằng model local; số chỉ nhịp là gợi ý cần nghe kiểm tra. Demo chỉ kiểm tra ký âm, không đại diện độ chính xác AI.
 
 [Trạng thái triển khai và những gì đã kiểm tra](docs/IMPLEMENTATION_STATUS.md) phân biệt các luồng đã chạy thật với những phần còn cần xác nhận trên PC.
 
@@ -27,6 +27,8 @@ drum-transcription serve
 Lệnh trên chọn **CPU** để bắt đầu kiểm chứng với môi trường đã chạy thử. Nếu dùng NVIDIA GPU, thay dòng cài Torch/TorchAudio bằng cặp CUDA phù hợp ở mục dưới trước khi cài extra.
 
 Mở **http://127.0.0.1:8765**. Lần đầu nên dùng clip **30–60 giây** và giữ chế độ **Tự nhận diện tempo & phách 1**. Không cần nhập BPM hoặc thời điểm phách đầu. App phân tích audio đã cắt, giữ mốc có phần lẻ của giây và hiển thị cả mốc trong clip lẫn mốc trong file tải lên. BPM trong app luôn là số **nốt đen/phút**, kể cả khi chọn nhịp 6/8.
+
+Đã cài v0.2: dừng server, chạy `git pull --ff-only`, kích hoạt môi trường cũ, rồi `python -m pip install -e .` và `drum-transcription serve`. Không cần tải lại model cho v0.3. Chạy lại clip cũ để nhận bản đồ từng ô; kết quả đã lưu vẫn đọc được.
 
 Trên Ubuntu/WSL, cài FFmpeg bằng `sudo apt install ffmpeg`. Trên Windows PowerShell, tạo môi trường bằng `py -3.12 -m venv .venv`, kích hoạt bằng `.venv\Scripts\Activate.ps1`, các lệnh `python -m pip` và `drum-transcription` giữ nguyên. Cài FFmpeg rồi thêm thư mục chứa `ffmpeg.exe` vào PATH.
 
@@ -76,12 +78,15 @@ Nếu app chạy WSL nhưng MuseScore chỉ cài trên Windows, cách kiểm ch�
 
 1. Chọn file nhạc hoặc drum stem; đặt khoảng bắt đầu và độ dài clip.
 2. Chọn ADTOF cho baseline 5 nhóm; dùng ADT_STR khi cần đối chiếu nhiều loại trống hơn.
-3. Giữ chế độ nhận diện nhịp tự động. Có thể gợi ý số chỉ nhịp hoặc đổi grid; BPM và phách 1 được suy ra từ audio.
+3. Giữ chế độ nhận diện nhịp tự động. Có thể gợi ý số chỉ nhịp **đầu đoạn** hoặc đổi grid; BPM và phách 1 được suy ra từ audio. Gợi ý đầu đoạn không khóa số chỉ nhịp của các đoạn sau.
 4. Nghe clip gốc, bản có click nhịp tự động, drum stem nếu có và âm thanh trống tổng hợp từ kết quả. Click mạnh đánh dấu phách 1 mà model tìm được.
-5. Xem sự kiện gốc, tải MIDI gốc, MIDI đã căn nhịp, MusicXML và PDF nếu MuseScore sẵn sàng.
-6. Nếu cần chỉnh kết quả, dùng **xuất lại sheet** với BPM/grid/phách đầu mong muốn. Đây là tùy chọn ghi đè thủ công; app tạo job mới từ sự kiện đã nhận diện, không chạy AI lại.
+5. Kiểm tra **Bản đồ ô nhịp**: thời gian, số chỉ nhịp, nhóm phách và tempo của từng ô. Chỗ đổi cách đếm, marker nội suy hoặc đuôi clip dự kiến cần nghe kỹ.
+6. Nếu cần, chỉnh số chỉ nhịp/nhóm phách của một ô hoặc một dải ô rồi xuất lại; không chạy AI lại. Thao tác giữ các mốc beat/downbeat, thay cách ký âm. Nhóm phách như `2+2+3` thay cách nối móc; không di chuyển marker âm thanh.
+7. Tải MIDI gốc, MIDI theo sheet, MusicXML và PDF nếu MuseScore sẵn sàng. Chế độ xuất lại bằng một BPM/meter/phách đầu cố định vẫn có riêng để ghi đè thủ công.
 
-`events.json` giữ timestamp gốc. `raw.mid` giữ timing biểu diễn. `rhythm.json` lưu các beat/downbeat đã phát hiện. MusicXML căn nốt theo lưới beat thực tế khi chạy tự động; MIDI của score phát ở BPM đại diện để nghe bản ký âm đã chuẩn hóa. Độ dài nốt trên sheet là cách biểu diễn tiết tấu, không phải thời gian ngân của cymbal. Các cú đánh trước phách 1 được giữ bằng ô nhịp lấy đà hoặc các ô nhịp trước đó; khoảng im lặng đầu file không tự biến thành nốt hoặc phách 1.
+`events.json` giữ timestamp và kết quả nhận diện ban đầu. `raw.mid` giữ timing biểu diễn. `rhythm.json` lưu bản đồ đang dùng, gồm beat/downbeat, từng ô, nguồn suy đoán và lịch sử chỉnh meter. MusicXML và MIDI theo sheet dùng lưới beat, tempo map và số chỉ nhịp theo từng đoạn. BPM tổng quan là trung vị; tempo từng ô có thể khác. Dao động tempo nhỏ được giữ cho playback, không in đầy nhãn trên sheet. Độ dài nốt trên sheet là cách biểu diễn tiết tấu, không phải thời gian ngân của cymbal. Các cú đánh trước phách 1 vẫn được giữ trong phần lấy đà hoặc các ô nhịp trước đó.
+
+Nhịp lẻ có hai phần khác nhau: **ghi được đúng ô nhịp** và **nghe ra cách đếm đúng**. App hỗ trợ ký âm tử số 1–32 với mẫu số 2/4/8/16, gồm `5/4`, `5/8`, `7/8`, `11/8`, `13/16`. Model Beat This! chỉ trả mốc beat/downbeat; bước hậu xử lý gợi ý số chỉ nhịp từng ô và nhóm 2/3 khi tỷ lệ thời gian lặp lại. Các pulse đều không xác định chắc chắn mẫu số, nên có thể gợi `5/4` trong khi người chơi muốn ghi `5/8`. Không coi gợi ý này là nhãn đã xác nhận.
 
 Ví dụ: chọn đoạn từ **1,5 giây** trong file tải lên, model tìm phách 1 ở **0,372 giây** trong clip thì mốc tương ứng là **1,872 giây** trong file. App không làm tròn thành giây nguyên. Đây là ví dụ phép quy đổi mốc, không phải cam kết sai số model bằng 1 ms. Xem [nhận diện nhịp tự động](docs/RHYTHM.md).
 
@@ -113,11 +118,13 @@ drum-transcription setup-models demucs
 
 Sau khi chuẩn bị model, có thể tắt mạng để chạy app. Không tải model ngầm khi bấm nhận diện. JavaScript/CSS được phục vụ từ app, không lấy từ CDN. App mặc định chỉ lắng nghe `127.0.0.1`; chưa có đăng nhập hoặc phân quyền để public lên Internet.
 
-## Giới hạn v0.2
+## Giới hạn v0.3
 
 - BPM và phách 1 được tự nhận diện, có thể chỉnh lại. Phách 1 đầu tiên **phát hiện được** có thể khác phách 1 thật nếu model bỏ sót; nghe lớp click để kiểm chứng. Nhịp kép, half/double-time và nhịp thay đổi giữa bài vẫn có thể gây nhầm.
-- Lưới beat được dùng để căn nốt khi tempo dao động; bản score phát MIDI ở BPM đại diện, chưa xuất một tempo map playback đầy đủ hoặc diễn giải swing tự động.
-- Nếu audio im lặng, quá ngắn hoặc beat/downbeat không nhất quán, app báo chưa xác định được nhịp; không tự điền 120 BPM/phách 1 tại giây 0. Có thể thử đoạn dài hơn hoặc chủ động dùng chế độ thủ công.
+- Số beat khác nhau giữa các ô không còn gây lỗi hoặc bị ép về một meter cho toàn clip. Tuy vậy, downbeat thừa/thiếu có thể trông giống đổi nhịp thật; các thay đổi tự suy ra được đánh dấu ước lượng. Nhóm phách dựa tỷ lệ 2/3 là heuristic có điều kiện, chưa phải model phân loại meter được đánh giá riêng.
+- Chỉnh theo ô giữ nguyên ranh giới ô đã nhận diện; hiện chưa có thao tác gộp/tách ô hoặc kéo marker downbeat trong web. Nếu marker sai, có thể thử clip dài hơn hoặc sửa MusicXML trong MuseScore. Không tự diễn giải swing/polyrhythm.
+- Tempo map đi theo beat grid, gồm cả sai số của detector. Lưới sai vẫn làm sheet sai; xuất được nhịp lẻ không đồng nghĩa nhận diện nhịp lẻ chính xác trên mọi bản nhạc.
+- Nếu audio im lặng, quá ngắn hoặc beat/downbeat không hợp lệ, app báo chưa xác định được nhịp; không tự điền 120 BPM/phách 1 tại giây 0. Có thể thử đoạn dài hơn hoặc chủ động dùng chế độ thủ công.
 - Grid nốt thẳng và chùm ba; hai voice cho tay/chân; ghi chú về cách xuất chi tiết ở [NOTATION.md](docs/NOTATION.md).
 - Một tác vụ AI chạy tại một thời điểm. Mỗi clip tối đa 600 giây, upload tối đa 200 MB. Ưu tiên clip ngắn để kiểm chứng.
 - Chưa có editor nốt trực tiếp trong web; dùng MuseScore sửa MusicXML. Chưa huấn luyện/fine-tune model riêng.
@@ -140,6 +147,7 @@ src/drum_transcription/
   jobs.py             # Single-worker queue and durable results
   audio.py            # FFmpeg clip decode and local Demucs
   rhythm.py           # Local Beat This!, tempo/downbeat grid and audible clicks
+  rhythm_edit.py      # Review per-bar meter/grouping, retaining detected times
   engines/            # Local ADTOF / ADT_STR adapters and setup
   domain.py           # Raw event and score contracts
   notation.py         # Quantization, MusicXML, MIDI, optional PDF

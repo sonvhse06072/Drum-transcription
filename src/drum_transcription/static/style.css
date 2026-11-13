@@ -722,6 +722,32 @@ progress::-moz-progress-bar {
   margin-bottom:13px;
 }
 
+.rhythm-review-notice {
+  border:1px solid #e5d4aa;
+  border-left:3px solid #ab7a31;
+  border-radius:8px;
+  background:var(--amber-bg);
+  color:#704d1b;
+  padding:12px 14px;
+  margin-bottom:16px;
+  font-size:11px;
+  line-height:1.7;
+}
+
+.rhythm-review-notice strong {
+  display:block;
+  font-size:12px;
+}
+
+.rhythm-review-notice p {
+  margin:5px 0 0;
+}
+
+.rhythm-review-notice ul {
+  padding-left:18px;
+  margin:7px 0 0;
+}
+
 .timing-source {
   color:var(--green);
   border:1px solid #c9dfd0;
@@ -754,6 +780,123 @@ progress::-moz-progress-bar {
 
 .rhythm-result .field-help {
   margin-top:14px;
+}
+
+.timing-values .meter-sequence {
+  font-size:15px;
+  line-height:1.65;
+}
+
+.bar-map {
+  border-top:1px solid #d0e0d4;
+  padding-top:16px;
+  margin-top:18px;
+}
+
+.bar-map .section-heading {
+  align-items:baseline;
+  flex-wrap:wrap;
+  gap:5px 12px;
+  margin-bottom:8px;
+}
+
+.bar-map-scroll {
+  max-height:340px;
+  border:1px solid var(--line);
+  border-radius:8px;
+  background:#fff;
+}
+
+.bar-map-scroll table {
+  min-width:550px;
+  margin:0;
+}
+
+.bar-map-scroll th {
+  position:sticky;
+  top:0;
+  background:#eef4ee;
+  z-index:1;
+}
+
+.bar-map-scroll td,.bar-map-scroll th {
+  padding:9px 10px;
+  white-space:nowrap;
+  font-size:10.5px;
+}
+
+.bar-map-scroll td:nth-child(2),.bar-map-scroll td:nth-child(5) {
+  font-variant-numeric:tabular-nums;
+}
+
+.bar-map-scroll .meter-change td {
+  border-top:2px solid #8cb39a;
+}
+
+.bar-map-scroll .meter-change td:nth-child(3) {
+  color:var(--green);
+  font-weight:700;
+}
+
+.bar-source {
+  padding:3px 6px;
+  border-radius:5px;
+  font-size:10px;
+}
+
+.bar-source.estimated {
+  color:var(--muted);
+  background:#f2f4f1;
+}
+
+.bar-source.user {
+  color:var(--green);
+  background:var(--green-light);
+}
+
+.bar-editor {
+  margin-top:15px;
+  font-size:12px;
+}
+
+.bar-editor .field {
+  margin-bottom:12px;
+}
+
+.bar-editor input,.bar-editor select {
+  min-height:38px;
+  font-size:12px;
+}
+
+.bar-editor-actions {
+  display:flex;
+  align-items:center;
+  gap:18px;
+  flex-wrap:wrap;
+  margin:2px 0 14px;
+}
+
+.field-error {
+  color:var(--red);
+}
+
+.bar-edit-pending {
+  background:#fff;
+  border:1px solid #c9dfd0;
+  border-radius:8px;
+  padding:12px 14px;
+  margin-bottom:15px;
+}
+
+.bar-edit-pending ul {
+  max-height:150px;
+  overflow:auto;
+  padding-left:18px;
+  margin:8px 0;
+}
+
+.bar-edit-pending .field-help {
+  margin:5px 0 0;
 }
 
 .result-section {

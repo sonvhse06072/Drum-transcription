@@ -1,7 +1,10 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const state = { health: null, file: null, job: null, timer: null, generation: 0, submitting: false };
+const state = {
+  health: null, file: null, job: null, timer: null, generation: 0, submitting: false,
+  rhythmBars: [], rhythmEditorJobId: null, barOverrides: new Map(), barEditorDirty: false,
+};
 const statuses = { queued: "Đang chờ", running: "Đang xử lý", completed: "Hoàn tất", failed: "Có lỗi" };
 const instruments = {
   kick: "Kick", snare: "Snare", tom_low: "Low tom", tom_mid: "Mid tom", tom_high: "High tom",
@@ -12,7 +15,7 @@ const instruments = {
 const fileLabels = {
   musicxml: ["MusicXML · mở trong MuseScore", true], pdf: ["PDF", false],
   raw_midi: ["MIDI gốc", false], score_midi: ["MIDI theo sheet", false], events: ["Cú đánh · JSON", false],
-  rhythm: ["Beat / phách 1 · JSON", false],
+  rhythm: ["Bản đồ nhịp & phách · JSON", false],
 };
 
 function textElement(tag, text, className) {
@@ -52,6 +55,28 @@ function updateRunState() {
   $("run-button").disabled = busy || !state.file || !chosenEngine()?.ready || !state.health?.ffmpeg || !timingReady;
   $("demo-button").disabled = busy || !state.health;
   $("rescore-button").disabled = busy || state.job?.status !== "completed";
+  const canEditBars = !busy && state.job?.status === "completed" && state.rhythmBars.length > 0;
+  for (const id of ["bar-edit-apply", "bar-edit-reset", "rhythm-rescore-button"]) $(id).disabled = !canEditBars;
+}
+
+function populateMeterChoices() {
+  const common = ["4/4", "3/4", "6/8", "2/4", "5/4", "7/4", "5/8", "7/8", "9/8", "11/8", "12/8", "13/16", "15/16"];
+  for (const id of ["meter", "rescore-meter", "bar-edit-meter"]) {
+    const select = $(id);
+    const previous = select.value;
+    const blank = Array.from(select.options).find((option) => option.value === "");
+    select.replaceChildren();
+    if (blank) select.append(blank);
+    for (const meter of common) {
+      const option = textElement("option", meter); option.value = meter; select.append(option);
+    }
+    const others = document.createElement("optgroup"); others.label = "Số chỉ nhịp khác";
+    for (const denominator of [2, 4, 8, 16]) for (let numerator = 1; numerator <= 32; numerator += 1) {
+      const meter = `${numerator}/${denominator}`;
+      if (!common.includes(meter)) { const option = textElement("option", meter); option.value = meter; others.append(option); }
+    }
+    select.append(others); select.value = previous;
+  }
 }
 
 function renderTimingMode() {
@@ -164,6 +189,80 @@ function formatSeconds(value) {
   return value == null || !Number.isFinite(Number(value)) ? "—" : `${Number(value).toLocaleString("vi-VN", { minimumFractionDigits: 3, maximumFractionDigits: 3 })} s`;
 }
 
+function barTempo(bar) {
+  const seconds = Number(bar.end_seconds) - Number(bar.start_seconds);
+  const quarters = Number(bar.end_quarter) - Number(bar.start_quarter);
+  return seconds > 0 && quarters > 0 ? 60 * quarters / seconds : null;
+}
+
+function meterSequence(bars) {
+  return bars.reduce((sequence, bar) => {
+    if (sequence.at(-1) !== bar.meter) sequence.push(bar.meter);
+    return sequence;
+  }, []);
+}
+
+function showBarError(message) {
+  $("bar-edit-error").textContent = message;
+  $("bar-edit-error").hidden = !message;
+}
+
+function renderPendingBars() {
+  const pending = [...state.barOverrides.values()].sort((left, right) => left.bar_index - right.bar_index);
+  $("bar-edit-pending").hidden = !pending.length;
+  $("bar-edit-reset").hidden = !pending.length;
+  if (!pending.length) { $("bar-edit-pending").replaceChildren(); return; }
+  const groups = [];
+  for (const item of pending) {
+    const last = groups.at(-1);
+    const grouping = item.grouping.join("+");
+    if (last && last.end + 1 === item.bar_index && last.meter === item.meter && last.grouping === grouping) last.end = item.bar_index;
+    else groups.push({ start: item.bar_index, end: item.bar_index, meter: item.meter, grouping });
+  }
+  const heading = textElement("strong", `Bản nháp: ${pending.length} ô được chỉnh`);
+  const list = document.createElement("ul");
+  for (const group of groups) {
+    const label = group.start === group.end ? `Ô ${group.start + 1}` : `Ô ${group.start + 1}–${group.end + 1}`;
+    list.append(textElement("li", `${label}: ${group.meter} · ${group.grouping || "nhóm mặc định"}`));
+  }
+  $("bar-edit-pending").replaceChildren(heading, list, textElement("p", "Các thay đổi chỉ áp dụng khi bạn bấm xuất sheet. Bảng phía trên vẫn là kết quả hiện tại.", "field-help"));
+}
+
+function renderBarMap(job, rhythm) {
+  const bars = automaticTiming(job) && Array.isArray(rhythm?.bars) ? rhythm.bars : [];
+  const initialize = state.rhythmEditorJobId !== job.id || (!state.rhythmBars.length && bars.length > 0);
+  state.rhythmBars = bars;
+  $("bar-map").hidden = !bars.length;
+  if (initialize) {
+    state.rhythmEditorJobId = job.id;
+    state.barOverrides.clear();
+    state.barEditorDirty = false;
+    $("bar-edit-start").value = 1; $("bar-edit-end").value = 1;
+    $("bar-edit-meter").value = bars[0]?.meter || "4/4";
+    $("bar-edit-grouping").value = bars[0]?.grouping?.join("+") || "";
+    $("rhythm-rescore-grid").value = resolvedScoreOptions(job, rhythm).subdivisions ?? 4;
+    showBarError(""); renderPendingBars();
+  }
+  $("bar-edit-start").max = bars.length; $("bar-edit-end").max = bars.length;
+  if (!bars.length) { $("bar-map-body").replaceChildren(); updateRunState(); return; }
+  const sequence = meterSequence(bars);
+  const changes = Math.max(0, sequence.length - 1);
+  $("bar-map-summary").textContent = `${bars.length} ô · ${changes} lần đổi số chỉ nhịp`;
+  $("bar-map-body").replaceChildren(...bars.map((bar, index) => {
+    const row = document.createElement("tr");
+    if (index && bar.meter !== bars[index - 1].meter) row.className = "meter-change";
+    const bpm = barTempo(bar);
+    const estimated = bar.estimated !== false;
+    const tail = bar.source === "extrapolated" || Number(bar.end_seconds) > Number(job.metrics?.duration_seconds) + 0.001;
+    const source = bar.source === "user" ? `Đã chỉnh${tail ? " · đuôi dự kiến" : ""}` : tail ? "Đuôi dự kiến" : estimated ? "Ước lượng" : "Đã lưu";
+    const values = [String(index + 1), `${formatSeconds(bar.start_seconds)} – ${formatSeconds(bar.end_seconds)}`, bar.meter, bar.grouping?.length ? bar.grouping.join("+") : "—", bpm == null ? "—" : bpm.toLocaleString("vi-VN", { maximumFractionDigits: 1 })];
+    row.append(...values.map((value) => textElement("td", value)));
+    const status = document.createElement("td"); status.append(textElement("span", source, `bar-source ${bar.source === "user" ? "user" : "estimated"}`)); row.append(status);
+    return row;
+  }));
+  updateRunState();
+}
+
 function renderRhythm(job, eventRhythm) {
   const rhythm = job.rhythm || eventRhythm;
   const options = resolvedScoreOptions(job, rhythm);
@@ -172,16 +271,28 @@ function renderRhythm(job, eventRhythm) {
   const downbeat = options.first_downbeat_seconds ?? job.metrics?.first_downbeat_seconds;
   const original = demo ? null : (job.metrics?.first_downbeat_original_seconds ?? (downbeat == null ? null : Number(downbeat) + Number(job.options?.clip_start_seconds ?? 0)));
   $("rhythm-result").hidden = false;
-  $("rhythm-source").textContent = demo ? "Dữ liệu mẫu" : auto ? "Tự nhận diện" : job.options?.rhythm_mode === "manual" ? "Nhập thủ công" : "Thông số đã lưu";
+  $("rhythm-source").textContent = demo ? "Dữ liệu mẫu" : job.kind === "rhythm_rescore" ? "Phách tự động · ký âm đã chỉnh" : auto ? "Tự nhận diện" : job.options?.rhythm_mode === "manual" ? "Nhập thủ công" : "Thông số đã lưu";
+  $("tempo-label").textContent = auto ? "Tempo trung vị · ♩ = BPM" : "Tempo cố định · ♩ = BPM";
   $("detected-bpm").textContent = options.bpm == null ? "—" : Number(options.bpm).toLocaleString("vi-VN", { maximumFractionDigits: 2 });
-  $("detected-meter").textContent = options.meter || "—";
+  const sequence = auto ? meterSequence(rhythm?.bars || []) : [];
+  $("detected-meter").textContent = sequence.length ? `${sequence.slice(0, 6).join(" → ")}${sequence.length > 6 ? " → …" : ""}` : options.meter || "—";
+  $("detected-meter").classList.toggle("meter-sequence", sequence.length > 1);
   $("detected-downbeat").textContent = formatSeconds(downbeat);
   $("original-downbeat").textContent = demo ? "Không có file gốc" : formatSeconds(original);
+  const unstable = auto && rhythm?.metadata?.rhythm_review_status === "unstable";
+  const reasons = unstable && Array.isArray(rhythm.metadata.rhythm_review_reasons)
+    ? rhythm.metadata.rhythm_review_reasons.filter((reason) => typeof reason === "string" && reason.trim())
+    : [];
+  $("rhythm-review-notice").hidden = !unstable;
+  $("rhythm-review-reasons").hidden = !reasons.length;
+  $("rhythm-review-reasons").replaceChildren(...reasons.map((reason) => textElement("li", reason)));
   $("rhythm-result-note").textContent = demo
     ? "Các mốc nhịp của mẫu được định nghĩa sẵn để kiểm tra ký âm."
     : auto
-      ? "BPM là ước lượng từ các beat nhận diện. Mốc phách 1 giữ phần lẻ của giây; mốc trong file gốc bằng điểm cắt cộng mốc trong clip. Nghe bản phách tự động để kiểm tra và xem các lưu ý bên dưới."
+      ? "BPM ở đây là tempo trung vị; tempo từng ô có thể thay đổi. Mốc trong file gốc bằng điểm cắt cộng mốc trong clip. Nghe bản phách để kiểm tra: máy có thể nhầm số chỉ nhịp hoặc bỏ sót phách 1. Ô cuối dự kiến có thể kéo dài quá phần audio còn lại."
       : "Sheet dùng tempo và phách đầu đã nhập. Mốc trong file gốc bằng điểm cắt cộng mốc trong clip; timing cú đánh gốc vẫn được giữ.";
+  if (auto && !rhythm?.bars?.length) $("rhythm-result-note").textContent += " Kết quả cũ chưa có bản đồ từng ô; chạy lại clip với phiên bản mới để phân tích đoạn đổi nhịp.";
+  renderBarMap(job, rhythm);
 }
 
 function safeFileUrl(value, jobId) {
@@ -388,6 +499,70 @@ $("rescore-form").addEventListener("submit", async (event) => {
   finally { state.submitting = false; updateRunState(); }
 });
 
+function applyBarEdits() {
+  showBarError("");
+  const first = Number($("bar-edit-start").value);
+  const last = Number($("bar-edit-end").value);
+  if (!Number.isInteger(first) || !Number.isInteger(last) || first < 1 || last < first || last > state.rhythmBars.length) {
+    showBarError(`Chọn khoảng ô hợp lệ từ 1 đến ${state.rhythmBars.length}.`); return false;
+  }
+  const meter = $("bar-edit-meter").value;
+  if (!/^(?:[1-9]|[12]\d|3[0-2])\/(?:2|4|8|16)$/.test(meter)) { showBarError("Chọn số chỉ nhịp hợp lệ."); return false; }
+  const raw = $("bar-edit-grouping").value.trim();
+  if (raw && !/^\d+(?:\s*\+\s*\d+)*$/.test(raw)) { showBarError("Nhóm phách dùng số nguyên dương nối bằng dấu +, ví dụ 2+2+3."); return false; }
+  const grouping = raw ? raw.split("+").map(Number) : [];
+  if (grouping.some((value) => !Number.isInteger(value) || value <= 0) || (grouping.length && grouping.reduce((sum, value) => sum + value, 0) !== Number(meter.split("/")[0]))) {
+    showBarError("Tổng các nhóm phách phải bằng tử số của số chỉ nhịp."); return false;
+  }
+  for (let number = first; number <= last; number += 1) state.barOverrides.set(number - 1, { bar_index: number - 1, meter, grouping: [...grouping] });
+  state.barEditorDirty = false;
+  renderPendingBars();
+  announce(`Đã ghi chỉnh sửa ô ${first}${last !== first ? ` đến ${last}` : ""} vào bản nháp.`);
+  return true;
+}
+
+$("bar-edit-apply").addEventListener("click", applyBarEdits);
+
+$("bar-edit-reset").addEventListener("click", () => {
+  state.barOverrides.clear(); state.barEditorDirty = false;
+  const bar = state.rhythmBars[Number($("bar-edit-start").value) - 1];
+  if (bar) { $("bar-edit-meter").value = bar.meter; $("bar-edit-grouping").value = bar.grouping?.join("+") || ""; }
+  showBarError(""); renderPendingBars(); announce("Đã bỏ các chỉnh sửa số chỉ nhịp trong bản nháp.");
+});
+
+$("bar-edit-start").addEventListener("change", () => {
+  const number = Number($("bar-edit-start").value);
+  if (Number($("bar-edit-end").value) < number) $("bar-edit-end").value = number;
+  const bar = state.rhythmBars[number - 1];
+  if (bar) {
+    const current = state.barOverrides.get(number - 1) || bar;
+    $("bar-edit-meter").value = current.meter;
+    $("bar-edit-grouping").value = current.grouping?.join("+") || "";
+    state.barEditorDirty = false;
+  }
+});
+
+$("bar-edit-meter").addEventListener("change", () => { $("bar-edit-grouping").value = ""; state.barEditorDirty = true; });
+$("bar-edit-grouping").addEventListener("input", () => { state.barEditorDirty = true; });
+$("bar-edit-end").addEventListener("input", () => { state.barEditorDirty = true; });
+
+$("rhythm-rescore-form").addEventListener("submit", async (event) => {
+  event.preventDefault(); if (!state.job || !state.rhythmBars.length) return;
+  showError(""); showBarError("");
+  if (state.barEditorDirty && !applyBarEdits()) return;
+  const options = {
+    title: state.job.options?.title || "Drum transcription",
+    subdivisions: Number($("rhythm-rescore-grid").value),
+    bar_overrides: [...state.barOverrides.values()].sort((left, right) => left.bar_index - right.bar_index),
+  };
+  state.submitting = true; updateRunState();
+  try {
+    selectJob(await api(`/api/jobs/${encodeURIComponent(state.job.id)}/rhythm-rescore`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(options) }));
+    loadHistory();
+  } catch (error) { showBarError(error.message); }
+  finally { state.submitting = false; updateRunState(); }
+});
+
 $("audio-file").addEventListener("change", (event) => selectFile(event.target.files[0]));
 $("engine").addEventListener("change", renderEngine);
 $("rhythm-mode").addEventListener("change", renderTimingMode);
@@ -400,5 +575,6 @@ $("drop-zone").addEventListener("drop", (event) => {
   if (file) { $("audio-file").files = event.dataTransfer.files; selectFile(file); }
 });
 
+populateMeterChoices();
 renderTimingMode();
 Promise.allSettled([loadHealth(), loadHistory()]);

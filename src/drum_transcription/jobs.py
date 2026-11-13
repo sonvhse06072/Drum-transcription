@@ -13,7 +13,14 @@ from pathlib import Path
 
 from .audio import decode_clip, separate_drums
 from .config import Settings
-from .domain import DrumHit, JobOptions, ScoreOptions, Transcription
+from .domain import (
+    DrumHit,
+    JobOptions,
+    RhythmAnalysis,
+    RhythmRescoreOptions,
+    ScoreOptions,
+    Transcription,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -179,7 +186,11 @@ class JobManager:
         merged = JobOptions.model_validate(
             {**previous["options"], **options.model_dump(), "rhythm_mode": "manual"}
         )
-        new = self.create(merged, kind=previous["kind"], parent_id=source_id)
+        new = self.create(
+            merged,
+            kind="demo" if previous["kind"] == "demo" else "rescore",
+            parent_id=source_id,
+        )
         try:
             for name in ("events.json", "source.wav", "drums.wav"):
                 source = self.directory(source_id) / name
@@ -199,6 +210,46 @@ class JobManager:
             (self.directory(job_id) / "events.json").read_text(encoding="utf-8")
         )
 
+    def create_rhythm_rescore(self, source_id: str, options: RhythmRescoreOptions) -> dict:
+        from .rhythm_edit import apply_bar_overrides
+
+        previous = self.get(source_id)
+        if previous["status"] != "completed":
+            raise ValueError("Chỉ có thể chỉnh bản đồ nhịp của một job đã hoàn tất.")
+        if not previous.get("rhythm"):
+            raise ValueError("Job này không dùng lưới nhịp tự động để chỉnh theo từng ô.")
+        analysis = RhythmAnalysis.model_validate(previous["rhythm"])
+        corrected = apply_bar_overrides(analysis, options)
+        merged = JobOptions.model_validate(
+            {
+                **previous["options"],
+                "title": options.title,
+                "subdivisions": options.subdivisions,
+                "rhythm_mode": "auto",
+                "bpm": None,
+                "meter": None,
+                "first_downbeat_seconds": None,
+            }
+        )
+        new = self.create(merged, kind="rhythm_rescore", parent_id=source_id)
+        try:
+            for name in ("events.json", "source.wav", "drums.wav"):
+                source = self.directory(source_id) / name
+                if source.is_file():
+                    shutil.copyfile(source, self.directory(new["id"]) / name)
+            self.update(
+                new["id"],
+                rhythm=corrected.model_dump(),
+                rhythm_review=options.model_dump(),
+            )
+            self.enqueue(new["id"])
+        except Exception:
+            self.update(
+                new["id"], status="failed", error="Không sao chép được kết quả để chỉnh nhịp."
+            )
+            raise
+        return self.get(new["id"])
+
     def _run(self, job_id: str) -> None:
         start = time.monotonic()
         try:
@@ -214,7 +265,17 @@ class JobManager:
             files = {}
             if job["parent_id"]:
                 transcription = self.read_events(job_id)
-                score_options = manual_score_options(options)
+                if job["kind"] == "rhythm_rescore":
+                    active_rhythm = RhythmAnalysis.model_validate(job["rhythm"])
+                    score_options = ScoreOptions(
+                        title=options.title,
+                        bpm=active_rhythm.bpm,
+                        meter=active_rhythm.meter,
+                        subdivisions=options.subdivisions,
+                        first_downbeat_seconds=active_rhythm.first_downbeat_seconds,
+                    )
+                else:
+                    score_options = manual_score_options(options)
                 self.update(job_id, stage="Dùng lại sự kiện gốc", progress=70)
             elif job["kind"] == "demo":
                 transcription = demo_transcription()
@@ -332,13 +393,21 @@ class JobManager:
                 "elapsed_seconds": round(time.monotonic() - start, 2),
                 "engine": transcription.engine,
                 "reused_inference": bool(job["parent_id"]),
-                "bpm_source": "beat_this"
+                "bpm_source": (
+                    "reviewed_beat_grid"
+                    if active_rhythm.metadata.get("meter_edit_history")
+                    else active_rhythm.engine
+                )
                 if active_rhythm
                 else ("demo" if job["kind"] == "demo" else "user"),
                 "first_downbeat_seconds": score_options.first_downbeat_seconds,
                 "first_downbeat_original_seconds": options.clip_start_seconds
                 + score_options.first_downbeat_seconds,
                 "rhythm_reused": bool(job["parent_id"] and transcription.rhythm),
+                "active_rhythm_reused": bool(job["parent_id"] and active_rhythm),
+                "meter_reviewed": bool(
+                    active_rhythm and active_rhythm.metadata.get("meter_edit_history")
+                ),
             }
             self.update(
                 job_id,

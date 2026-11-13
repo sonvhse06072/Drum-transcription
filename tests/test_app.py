@@ -8,7 +8,13 @@ from fastapi.testclient import TestClient
 
 from drum_transcription.app import create_app
 from drum_transcription.config import Settings
-from drum_transcription.domain import DrumHit, JobOptions, RhythmAnalysis, Transcription
+from drum_transcription.domain import (
+    DrumHit,
+    JobOptions,
+    RhythmAnalysis,
+    RhythmBar,
+    Transcription,
+)
 from drum_transcription.jobs import JobManager
 
 
@@ -301,3 +307,110 @@ def test_legacy_job_keeps_its_original_manual_timing():
     assert options.rhythm_mode == "manual"
     assert options.bpm == 95
     assert options.first_downbeat_seconds == 1.5
+
+
+def test_bar_review_reuses_active_map_and_events_then_can_switch_to_manual(settings, monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Reviewing a bar map must not run either AI model again")
+
+    monkeypatch.setattr("drum_transcription.engines.transcribe", forbidden)
+    monkeypatch.setattr("drum_transcription.rhythm.analyze_rhythm", forbidden)
+    monkeypatch.setattr(Settings, "musescore", property(lambda self: None))
+    rhythm = RhythmAnalysis(
+        bpm=120,
+        meter="4/4",
+        first_downbeat_seconds=0.37,
+        beats_seconds=[0.12, 0.37, 0.87, 1.37, 1.87, 2.37, 2.87, 3.37],
+        downbeats_seconds=[0.37, 2.37],
+        beat_positions_quarters=[-0.5, 0, 1, 2, 3, 4, 5, 6],
+        bars=[
+            RhythmBar(
+                start_seconds=0.37, end_seconds=2.37, start_quarter=0, end_quarter=4, meter="4/4"
+            ),
+            RhythmBar(
+                start_seconds=2.37,
+                end_seconds=3.87,
+                start_quarter=4,
+                end_quarter=7,
+                meter="3/4",
+                source="extrapolated",
+            ),
+        ],
+    )
+    events = Transcription(
+        engine="annotated-fixture",
+        duration_seconds=3.7,
+        rhythm=rhythm,
+        hits=[DrumHit(time_seconds=when, instrument="kick") for when in (0.12, 0.37, 2.37, 3.37)],
+    )
+    with TestClient(create_app(settings)) as client:
+        manager = client.app.state.jobs
+        original = manager.create(JobOptions(clip_start_seconds=1.5, clip_duration_seconds=3.7))
+        directory = manager.directory(original["id"])
+        (directory / "events.json").write_text(events.model_dump_json(), encoding="utf-8")
+        sf.write(directory / "source.wav", np.zeros(59200, dtype=np.float32), 16000)
+        manager.update(original["id"], status="completed", rhythm=rhythm.model_dump())
+
+        response = client.post(
+            f"/api/jobs/{original['id']}/rhythm-rescore",
+            json={
+                "title": "Mixed meter",
+                "subdivisions": 4,
+                "bar_overrides": [{"bar_index": 1, "meter": "7/8", "grouping": [2, 2, 3]}],
+            },
+        )
+        assert response.status_code == 202, response.text
+        reviewed = completed(client, response.json()["id"])
+        assert reviewed["kind"] == "rhythm_rescore"
+        assert reviewed["options"]["rhythm_mode"] == "auto"
+        assert reviewed["options"]["bpm"] is None
+        assert reviewed["metrics"]["active_rhythm_reused"] is True
+        assert reviewed["metrics"]["meter_reviewed"] is True
+        assert reviewed["metrics"]["first_downbeat_original_seconds"] == pytest.approx(1.87)
+        assert reviewed["metrics"]["score_hit_count"] == 4
+        assert [bar["meter"] for bar in reviewed["rhythm"]["bars"]] == ["4/4", "7/8"]
+        assert client.get(reviewed["files"]["events"]).json() == events.model_dump()
+        assert client.get(reviewed["files"]["rhythm"]).json() == reviewed["rhythm"]
+        assert client.get(reviewed["files"]["beat_preview"]).content.startswith(b"RIFF")
+        assert manager.get(original["id"])["rhythm"] == rhythm.model_dump()
+
+        again = client.post(
+            f"/api/jobs/{reviewed['id']}/rhythm-rescore",
+            json={
+                "title": "Second review",
+                "subdivisions": 4,
+                "bar_overrides": [{"bar_index": 0, "meter": "5/4"}],
+            },
+        )
+        second = completed(client, again.json()["id"])
+        assert [bar["meter"] for bar in second["rhythm"]["bars"]] == ["5/4", "7/8"]
+        assert client.get(second["files"]["events"]).json() == events.model_dump()
+        assert second["rhythm"]["bars"][1]["start_quarter"] == 5
+
+        fixed = client.post(
+            f"/api/jobs/{second['id']}/rescore",
+            json={
+                "title": "Fixed timing",
+                "bpm": 110,
+                "meter": "4/4",
+                "subdivisions": 4,
+                "first_downbeat_seconds": 0.37,
+            },
+        )
+        assert fixed.status_code == 202
+        manual = completed(client, fixed.json()["id"])
+        assert manual["options"]["rhythm_mode"] == "manual"
+        assert manual["rhythm"] is None
+        assert manual["metrics"]["active_rhythm_reused"] is False
+        assert client.get(manual["files"]["events"]).json() == events.model_dump()
+
+        count = len(manager.list())
+        invalid = client.post(
+            f"/api/jobs/{second['id']}/rhythm-rescore",
+            json={
+                "bar_overrides": [{"bar_index": 20, "meter": "7/8"}],
+            },
+        )
+        assert invalid.status_code == 422
+        assert client.post(f"/api/jobs/{manual['id']}/rhythm-rescore", json={}).status_code == 422
+        assert len(manager.list()) == count

@@ -1,8 +1,78 @@
 """Shared contracts. Raw event timing is never changed by score quantization."""
 
+import math
+from bisect import bisect_right
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+METER_PATTERN = r"^([1-9]|[12][0-9]|3[0-2])/(2|4|8|16)$"
+
+
+class RhythmBar(BaseModel):
+    """A complete nominal bar; an extrapolated last boundary can exceed the clip."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    start_seconds: float = Field(ge=0, allow_inf_nan=False)
+    end_seconds: float = Field(gt=0, allow_inf_nan=False)
+    start_quarter: float = Field(ge=0, allow_inf_nan=False)
+    end_quarter: float = Field(gt=0, allow_inf_nan=False)
+    meter: str = Field(pattern=METER_PATTERN)
+    grouping: list[int] = Field(default_factory=list)
+    source: str = "detected"
+    estimated: bool = True
+
+    @model_validator(mode="after")
+    def valid_bar(self) -> "RhythmBar":
+        numerator, denominator = map(int, self.meter.split("/"))
+        if self.end_seconds <= self.start_seconds:
+            raise ValueError("Bar end must follow its start.")
+        if not math.isclose(
+            self.end_quarter - self.start_quarter,
+            numerator * 4 / denominator,
+            abs_tol=1e-6,
+        ):
+            raise ValueError("Bar length must match its time signature.")
+        if self.grouping and (
+            any(value <= 0 for value in self.grouping) or sum(self.grouping) != numerator
+        ):
+            raise ValueError("Beat groups must be positive and add up to the meter numerator.")
+        return self
+
+
+class BarOverride(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    bar_index: int = Field(ge=0)
+    meter: str = Field(pattern=METER_PATTERN)
+    grouping: list[int] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def valid_grouping(self) -> "BarOverride":
+        numerator = int(self.meter.split("/")[0])
+        if self.grouping and (
+            any(value <= 0 for value in self.grouping) or sum(self.grouping) != numerator
+        ):
+            raise ValueError("Nhóm phách phải là các số dương có tổng bằng tử số của nhịp.")
+        return self
+
+
+class RhythmRescoreOptions(BaseModel):
+    """Review meter/grouping while retaining detected timestamps and raw drum events."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(default="Drum transcription", min_length=1, max_length=120)
+    subdivisions: Literal[1, 2, 3, 4, 6, 8] = 4
+    bar_overrides: list[BarOverride] = Field(default_factory=list, max_length=4096)
+
+    @model_validator(mode="after")
+    def unique_bars(self) -> "RhythmRescoreOptions":
+        indices = [item.bar_index for item in self.bar_overrides]
+        if len(indices) != len(set(indices)):
+            raise ValueError("Mỗi ô nhịp chỉ được xuất hiện một lần trong phần chỉnh sửa.")
+        return self
 
 
 class DrumHit(BaseModel):
@@ -20,19 +90,18 @@ class RhythmAnalysis(BaseModel):
 
     engine: str = "beat_this"
     bpm: float = Field(ge=20, le=400, allow_inf_nan=False)
-    meter: str = Field(pattern=r"^(2|3|4|5|6|7|9|12)/(4|8)$")
+    meter: str = Field(pattern=METER_PATTERN)
     first_downbeat_seconds: float = Field(ge=0, allow_inf_nan=False)
     beats_seconds: list[float]
     downbeats_seconds: list[float]
     beat_positions_quarters: list[float]
-    beat_unit_quarters: float = Field(default=1, gt=0, le=6, allow_inf_nan=False)
+    beat_unit_quarters: float = Field(default=1, gt=0, le=64, allow_inf_nan=False)
+    bars: list[RhythmBar] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def valid_grid(self) -> "RhythmAnalysis":
-        import math
-
         if len(self.beats_seconds) < 2 or len(self.beats_seconds) != len(
             self.beat_positions_quarters
         ):
@@ -46,6 +115,42 @@ class RhythmAnalysis(BaseModel):
             raise ValueError("Detected times cannot precede the audio clip.")
         if abs(self.first_downbeat_seconds - self.downbeats_seconds[0]) > 1e-6:
             raise ValueError("The first downbeat must match the detected downbeat list.")
+
+        def quarter_at_time(when: float) -> float:
+            index = min(
+                max(bisect_right(self.beats_seconds, when) - 1, 0), len(self.beats_seconds) - 2
+            )
+            proportion = (when - self.beats_seconds[index]) / (
+                self.beats_seconds[index + 1] - self.beats_seconds[index]
+            )
+            return self.beat_positions_quarters[index] + proportion * (
+                self.beat_positions_quarters[index + 1] - self.beat_positions_quarters[index]
+            )
+
+        if abs(quarter_at_time(self.first_downbeat_seconds)) > 1e-5:
+            raise ValueError("The first downbeat must map to musical quarter zero.")
+        if self.bars:
+            first = self.bars[0]
+            if (
+                abs(first.start_quarter) > 1e-6
+                or abs(first.start_seconds - self.first_downbeat_seconds) > 1e-6
+                or first.meter != self.meter
+            ):
+                raise ValueError(
+                    "The bar map must begin at the first downbeat with the initial meter."
+                )
+            for previous, following in zip(self.bars, self.bars[1:]):
+                if (
+                    abs(previous.end_quarter - following.start_quarter) > 1e-6
+                    or abs(previous.end_seconds - following.start_seconds) > 1e-6
+                ):
+                    raise ValueError("The bar map must be continuous in time and musical position.")
+            for bar in self.bars:
+                if (
+                    abs(quarter_at_time(bar.start_seconds) - bar.start_quarter) > 1e-5
+                    or abs(quarter_at_time(bar.end_seconds) - bar.end_quarter) > 1e-5
+                ):
+                    raise ValueError("Bar boundaries must match the detected beat grid.")
         return self
 
 
@@ -63,7 +168,7 @@ class ScoreOptions(BaseModel):
 
     title: str = Field(default="Drum transcription", min_length=1, max_length=120)
     bpm: float = Field(default=120, ge=20, le=400, allow_inf_nan=False)
-    meter: str = Field(default="4/4", pattern=r"^(2|3|4|5|6|7|9|12)/(4|8)$")
+    meter: str = Field(default="4/4", pattern=METER_PATTERN)
     subdivisions: Literal[1, 2, 3, 4, 6, 8] = 4
     first_downbeat_seconds: float = Field(default=0, ge=0, allow_inf_nan=False)
 
@@ -71,7 +176,7 @@ class ScoreOptions(BaseModel):
 class JobOptions(ScoreOptions):
     rhythm_mode: Literal["auto", "manual"] = "auto"
     bpm: float | None = Field(default=None, ge=20, le=400, allow_inf_nan=False)
-    meter: str | None = Field(default=None, pattern=r"^(2|3|4|5|6|7|9|12)/(4|8)$")
+    meter: str | None = Field(default=None, pattern=METER_PATTERN)
     first_downbeat_seconds: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     engine: Literal["adtof", "adt_str"] = "adtof"
     device: Literal["auto", "cpu", "cuda", "mps"] = "auto"

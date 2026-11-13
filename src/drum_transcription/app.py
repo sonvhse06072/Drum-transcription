@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from . import __version__
 from .audio import ALLOWED_EXTENSIONS, separation_status
 from .config import Settings
-from .domain import JobOptions, ScoreOptions
+from .domain import JobOptions, RhythmRescoreOptions, ScoreOptions
 from .jobs import JobManager
 
 STATIC = Path(__file__).parent / "static"
@@ -163,6 +163,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def rescore(job_id: str, options: ScoreOptions, request: Request):
         try:
             return request.app.state.jobs.create_rescore(job_id, options)
+        except KeyError:
+            raise HTTPException(404, "Không tìm thấy job.") from None
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.post("/api/jobs/{job_id}/rhythm-rescore", status_code=202)
+    def rhythm_rescore(job_id: str, options: RhythmRescoreOptions, request: Request):
+        try:
+            return request.app.state.jobs.create_rhythm_rescore(job_id, options)
         except KeyError:
             raise HTTPException(404, "Không tìm thấy job.") from None
         except ValueError as exc:

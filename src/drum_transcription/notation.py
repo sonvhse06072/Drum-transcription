@@ -1,7 +1,7 @@
 """Deterministic drum engraving; recognition and musical interpretation stay separate.
 
-Detected beat times or an explicit manual grid determine note positions. Score
-playback uses a nominal tempo; raw MIDI retains the original event times.
+Detected beat times or an explicit manual grid determine note positions. Local
+meter and tempo maps drive the score; raw MIDI retains the original event times.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
+from statistics import median
 from typing import Any
 from xml.etree import ElementTree as ET
 
@@ -86,6 +87,24 @@ class QuantizedHit:
     error_seconds: float
 
 
+@dataclass(frozen=True)
+class MeasurePlan:
+    """A written measure; ``nominal_start`` precedes ``start`` for a pickup."""
+
+    start: Fraction
+    end: Fraction
+    nominal_start: Fraction
+    meter: str
+    grouping: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
+class TempoPoint:
+    quarter: float
+    microseconds: int
+    display_bpm: float | None = None
+
+
 def _interpolate(value: float, source: list[float], target: list[float]) -> float:
     """Piecewise linear interpolation, using the nearest interval at either edge."""
     index = min(max(bisect_right(source, value) - 1, 0), len(source) - 2)
@@ -112,11 +131,158 @@ def _meter_lengths(options: ScoreOptions) -> tuple[Fraction, Fraction]:
     return bar_length, beat_length
 
 
-def _score_origin(options: ScoreOptions, events: list[QuantizedHit]) -> Fraction:
+def _group_lengths(signature: str, grouping: tuple[int, ...] = ()) -> list[Fraction]:
+    numerator, denominator = map(int, signature.split("/"))
+    if not grouping:
+        if denominator in (8, 16) and numerator >= 6 and numerator % 3 == 0:
+            grouping = (3,) * (numerator // 3)
+        elif denominator in (8, 16) and numerator >= 5 and numerator % 2:
+            grouping = (2,) * ((numerator - 3) // 2) + (3,)
+        else:
+            grouping = (1,) * numerator
+    return [Fraction(value * 4, denominator) for value in grouping]
+
+
+def _score_origin(
+    options: ScoreOptions, events: list[QuantizedHit], rhythm: RhythmAnalysis | None = None,
+) -> Fraction:
     """Start at a beat boundary so a cut within a beat has an intelligible pickup."""
-    _, beat_length = _meter_lengths(options)
     earliest = min((event.quarter for event in events), default=Fraction(0))
+    if rhythm is not None and rhythm.bars and earliest < 0:
+        first = rhythm.bars[0]
+        groups = _group_lengths(first.meter, tuple(first.grouping))
+        bar_length = sum(groups, Fraction(0))
+        bar_start = (earliest // bar_length) * bar_length
+        boundaries = [bar_start]
+        for group in groups:
+            boundaries.append(boundaries[-1] + group)
+        return max(value for value in boundaries if value <= earliest)
+    _, beat_length = _meter_lengths(options)
     return min(Fraction(0), (earliest // beat_length) * beat_length)
+
+
+def _measure_plan(
+    transcription: Transcription, options: ScoreOptions, events: list[QuantizedHit],
+    rhythm: RhythmAnalysis | None,
+) -> list[MeasurePlan]:
+    """Use explicit local bars; extrapolate only before/after the available map."""
+    origin = _score_origin(options, events, rhythm)
+    clip_end = max(0, _time_to_quarter(transcription.duration_seconds, options, rhythm))
+    # An attack needs a containing bar, not an entire grid cell beyond its
+    # onset. A triplet grid may leave less than one cell before an odd barline.
+    note_end = float(events[-1].quarter) + 1e-7 if events else 0
+    score_end = max(clip_end, note_end)
+    plans: list[MeasurePlan] = []
+    first_meter = rhythm.bars[0].meter if rhythm is not None and rhythm.bars else options.meter
+    first_grouping = tuple(rhythm.bars[0].grouping) if rhythm is not None and rhythm.bars else ()
+    numerator, denominator = map(int, first_meter.split("/"))
+    first_length = Fraction(numerator * 4, denominator)
+    cursor = (origin // first_length) * first_length
+    while cursor < 0:
+        plans.append(MeasurePlan(max(origin, cursor), cursor + first_length, cursor, first_meter, first_grouping))
+        cursor += first_length
+    if rhythm is not None and rhythm.bars:
+        for local_bar in rhythm.bars:
+            start = Fraction(local_bar.start_quarter).limit_denominator(1920)
+            end = Fraction(local_bar.end_quarter).limit_denominator(1920)
+            if start >= score_end - 1e-9 and plans:
+                break
+            plans.append(MeasurePlan(start, end, start, local_bar.meter, tuple(local_bar.grouping)))
+        cursor = plans[-1].end if plans else Fraction(0)
+        last_meter = plans[-1].meter if plans else first_meter
+        last_grouping = plans[-1].grouping if plans else first_grouping
+    else:
+        cursor = Fraction(0)
+        last_meter, last_grouping = first_meter, first_grouping
+    numerator, denominator = map(int, last_meter.split("/"))
+    last_length = Fraction(numerator * 4, denominator)
+    while cursor < score_end - 1e-9 or not plans or plans[-1].end <= 0:
+        plans.append(MeasurePlan(cursor, cursor + last_length, cursor, last_meter, last_grouping))
+        cursor += last_length
+    return plans
+
+
+def _tempo_points(
+    options: ScoreOptions, rhythm: RhythmAnalysis | None, origin: Fraction, end: Fraction,
+) -> list[TempoPoint]:
+    """Piecewise slopes preserve performed beat times; visible labels are smoothed."""
+    if rhythm is None:
+        return [TempoPoint(float(origin), mido.bpm2tempo(options.bpm), options.bpm)]
+    positions, seconds = rhythm.beat_positions_quarters, rhythm.beats_seconds
+    quarters = [float(origin)] + [value for value in positions[:-1] if origin < value < end]
+    points: list[TempoPoint] = []
+    for quarter in quarters:
+        index = min(max(bisect_right(positions, quarter) - 1, 0), len(positions) - 2)
+        microseconds = round(1_000_000 * (seconds[index + 1] - seconds[index]) / (positions[index + 1] - positions[index]))
+        if not 1 <= microseconds <= 0xFFFFFF:
+            raise ValueError("The detected tempo grid lies outside the MIDI tempo range.")
+        points.append(TempoPoint(quarter, microseconds))
+    bpms = [60_000_000 / point.microseconds for point in points]
+    # Three neighbouring pulse intervals reject detector jitter. A new label
+    # needs two agreeing intervals and >=8% / 4 BPM difference from the last
+    # printed tempo. The full, unsmoothed map remains in playback.
+    initial = round(median(bpms[:3]), 1)
+    result = [TempoPoint(points[0].quarter, points[0].microseconds, initial)]
+    previous_label = initial
+    for index, point in enumerate(points[1:], 1):
+        future = bpms[index:index + 3]
+        candidate = round(median(future), 1)
+        stable = len(future) >= 2 and max(future) / min(future) <= 1.10
+        change = abs(candidate - previous_label) >= max(4, previous_label * 0.08)
+        # Locate a sustained step at the first interval of the new tempo,
+        # rather than one pulse early when the median window sees ahead.
+        matches_current = abs(bpms[index] - candidate) <= candidate * 0.05
+        visible = candidate if stable and change and matches_current else None
+        if visible is not None:
+            previous_label = visible
+        result.append(TempoPoint(point.quarter, point.microseconds, visible))
+    return result
+
+
+def _time_signature(signature: str, grouping: tuple[int, ...]) -> meter.TimeSignature:
+    result = meter.TimeSignature(signature)
+    if grouping:
+        denominator = int(signature.split("/")[1])
+        parts = [f"{value}/{denominator}" for value in grouping]
+        result.beamSequence.partitionByList(parts)
+        result.beatSequence.partitionByList(parts)
+    return result
+
+
+def _quantized_position(
+    position: float, options: ScoreOptions, rhythm: RhythmAnalysis | None,
+    *, bar_starts: list[float] | None = None,
+) -> Fraction:
+    """Anchor subdivisions at the local bar; every barline is a valid target.
+
+    For example, the next 3/8 bar begins at quarter 1.5 even when the chosen
+    grid is thirds of a quarter. Rounding on one global thirds grid would move
+    its downbeat to 5/3 and misplace every subsequent bar.
+    """
+    if rhythm is not None and rhythm.bars:
+        starts = bar_starts if bar_starts is not None else [item.start_quarter for item in rhythm.bars]
+        index = bisect_right(starts, position) - 1
+        if index >= 0:
+            local_bar = rhythm.bars[index]
+            start = Fraction(local_bar.start_quarter).limit_denominator(1920)
+            end = Fraction(local_bar.end_quarter).limit_denominator(1920)
+            if position >= float(end):
+                length = end - start
+                start += math.floor((position - float(start)) / float(length)) * length
+                end = start + length
+        else:
+            length = Fraction(rhythm.bars[0].end_quarter).limit_denominator(1920)
+            start = math.floor(position / float(length)) * length
+            end = start + length
+    else:
+        length, _ = _meter_lengths(options)
+        start = math.floor(position / float(length)) * length
+        end = start + length
+    step_index = math.floor((position - float(start)) * options.subdivisions + 0.5)
+    rounded = max(start, min(end, start + Fraction(step_index, options.subdivisions)))
+    candidates = {start, rounded, end}
+    error = min(abs(float(candidate) - position) for candidate in candidates)
+    return max(candidate for candidate in candidates if abs(float(candidate) - position) <= error + 1e-10)
 
 
 def _quantize(
@@ -130,6 +296,7 @@ def _quantize(
     collisions = 0
     supported_marks = {"ghost", "accent", "open", "closed", "roll"}
     unsupported_marks: set[str] = set()
+    bar_starts = [item.start_quarter for item in rhythm.bars] if rhythm is not None else []
     for hit in sorted(transcription.hits, key=lambda h: h.time_seconds):
         if hit.instrument not in INSTRUMENTS:
             unknown.add(hit.instrument)
@@ -137,8 +304,7 @@ def _quantize(
         if hit.time_seconds < options.first_downbeat_seconds - 1e-9:
             before += 1
         musical_position = _time_to_quarter(hit.time_seconds, options, rhythm)
-        grid_position = math.floor(musical_position * options.subdivisions + 0.5)
-        quarter = Fraction(grid_position, options.subdivisions)
+        quarter = _quantized_position(musical_position, options, rhythm, bar_starts=bar_starts)
         error = _quarter_to_time(float(quarter), options, rhythm) - hit.time_seconds
         errors.append(abs(error))
         unsupported_marks.update(set(hit.articulations) - supported_marks)
@@ -242,6 +408,61 @@ def _write_midi(
     midi_file.save(path)
 
 
+def _write_score_midi(
+    path: Path, events: list[QuantizedHit], options: ScoreOptions,
+    rhythm: RhythmAnalysis | None, plans: list[MeasurePlan], tempos: list[TempoPoint],
+) -> None:
+    """Encode musical positions with a local tempo map and bar signatures."""
+    midi_file = mido.MidiFile(type=0, ticks_per_beat=960)
+    track = mido.MidiTrack()
+    midi_file.tracks.append(track)
+    track.append(mido.MetaMessage("track_name", name="Drums", time=0))
+    origin = plans[0].start
+    midi_events: list[tuple[int, int, mido.Message | mido.MetaMessage]] = []
+    previous_tempo: int | None = None
+    for point in tempos:
+        if point.microseconds != previous_tempo:
+            tick = round((point.quarter - float(origin)) * midi_file.ticks_per_beat)
+            midi_events.append((tick, -3, mido.MetaMessage("set_tempo", tempo=point.microseconds)))
+            previous_tempo = point.microseconds
+    previous_meter: str | None = None
+    for plan in plans:
+        if plan.meter != previous_meter:
+            numerator, denominator = map(int, plan.meter.split("/"))
+            midi_events.append((
+                round((plan.start - origin) * midi_file.ticks_per_beat), -2,
+                mido.MetaMessage(
+                    "time_signature", numerator=numerator, denominator=denominator,
+                    clocks_per_click=36 if denominator == 8 and numerator in (6, 9, 12) else 24,
+                ),
+            ))
+            previous_meter = plan.meter
+    by_pitch: dict[int, list[QuantizedHit]] = defaultdict(list)
+    for event in events:
+        by_pitch[INSTRUMENTS[event.hit.instrument].midi].append(event)
+    for pitch, hits in by_pitch.items():
+        hits.sort(key=lambda event: event.quarter)
+        for index, event in enumerate(hits):
+            when = _quarter_to_time(float(event.quarter), options, rhythm)
+            next_when = (
+                _quarter_to_time(float(hits[index + 1].quarter), options, rhythm)
+                if index + 1 < len(hits) else when + 1
+            )
+            gate = min(0.10, max(0.001, (next_when - when) / 2))
+            end_quarter = _time_to_quarter(when + gate, options, rhythm)
+            onset = round((event.quarter - origin) * midi_file.ticks_per_beat)
+            offset = max(onset + 1, round((end_quarter - float(origin)) * midi_file.ticks_per_beat))
+            midi_events.append((onset, 1, mido.Message("note_on", channel=9, note=pitch, velocity=event.hit.velocity or 100)))
+            midi_events.append((offset, 0, mido.Message("note_off", channel=9, note=pitch, velocity=0)))
+    previous_tick = 0
+    for tick, _, message in sorted(midi_events, key=lambda event: (event[0], event[1])):
+        message.time = tick - previous_tick
+        track.append(message)
+        previous_tick = tick
+    track.append(mido.MetaMessage("end_of_track", time=0))
+    midi_file.save(path)
+
+
 def _make_instrument(name: str) -> instrument.UnpitchedPercussion:
     spec = INSTRUMENTS[name]
     drum = instrument.UnpitchedPercussion()
@@ -313,51 +534,72 @@ def _build_score(
     part.partName = "Drum kit"
     part.partAbbreviation = "Dr."
     note_sources: dict[str, DrumHit] = {}
-    bar_length, beat_length = _meter_lengths(options)
-    origin = _score_origin(options, events)
-    first_bar_index = int(origin // bar_length)
-    has_pickup = origin != first_bar_index * bar_length
-    clip_quarters = max(0, _time_to_quarter(transcription.duration_seconds, options, rhythm))
-    last_quarter = float(events[-1].quarter) + 1 / options.subdivisions if events else 0
-    final_bar_index = max(1, math.ceil(max(clip_quarters, last_quarter) / float(bar_length) - 1e-9))
-    bar_count = final_bar_index - first_bar_index
+    plans = _measure_plan(transcription, options, events, rhythm)
+    origin = plans[0].start
+    has_pickup = plans[0].start != plans[0].nominal_start
+    starts = [plan.start for plan in plans]
     by_measure: dict[int, list[QuantizedHit]] = defaultdict(list)
     for event in events:
-        by_measure[int(event.quarter // bar_length)].append(event)
+        index = bisect_right(starts, event.quarter) - 1
+        if index < 0 or event.quarter >= plans[index].end:
+            raise ValueError("A quantized event falls outside the written bar map.")
+        by_measure[index].append(event)
+    tempos = _tempo_points(options, rhythm, origin, plans[-1].end)
+    tempos_by_measure: dict[int, list[tuple[int, TempoPoint]]] = defaultdict(list)
+    for point_index, point in enumerate(tempos):
+        measure_index = bisect_right(starts, point.quarter) - 1
+        tempos_by_measure[measure_index].append((point_index, point))
+    previous_tempo: int | None = None
+    previous_signature: tuple[str, tuple[int, ...]] | None = None
     triplets = options.subdivisions in (3, 6)
-    for measure_index, bar_index in enumerate(range(first_bar_index, final_bar_index)):
-        measure_start = max(origin, bar_index * bar_length)
-        measure_length = (bar_index + 1) * bar_length - measure_start
+    for measure_index, plan in enumerate(plans):
+        measure_length = plan.end - plan.start
+        bar_length = plan.end - plan.nominal_start
         measure = stream.Measure(number=measure_index if has_pickup else measure_index + 1)
-        if measure_length < bar_length:
-            measure.paddingLeft = bar_length - measure_length
+        if plan.start != plan.nominal_start:
+            measure.paddingLeft = plan.start - plan.nominal_start
             measure.showNumber = stream.enums.ShowNumber.NEVER
         if measure_index == 0:
             measure.insert(0, clef.PercussionClef())
             measure.insert(0, layout.StaffLayout(staffLines=5))
-            measure.insert(0, meter.TimeSignature(options.meter))
-            measure.insert(0, tempo.MetronomeMark(number=options.bpm, referent=duration.Duration(1)))
+        signature = (plan.meter, plan.grouping)
+        if signature != previous_signature:
+            measure.insert(0, _time_signature(*signature))
+            if len(set(plan.grouping)) > 1:
+                grouping_text = expressions.TextExpression("+".join(map(str, plan.grouping)))
+                grouping_text.style.fontSize = 9
+                measure.insert(0, grouping_text)
+            previous_signature = signature
+        for point_index, point in tempos_by_measure[measure_index]:
+            if point.microseconds == previous_tempo and point.display_bpm is None:
+                continue
+            exact_bpm = 60_000_000 / point.microseconds
+            mark = tempo.MetronomeMark(
+                number=point.display_bpm if point.display_bpm is not None else exact_bpm,
+                numberSounding=exact_bpm, referent=duration.Duration(1),
+            )
+            mark.id = f"dt-tempo-{'visible' if point.display_bpm is not None else 'hidden'}-{point_index}"
+            measure.insert(Fraction(point.quarter - float(plan.start)).limit_denominator(1920), mark)
+            previous_tempo = point.microseconds
+        group_spans: list[tuple[Fraction, Fraction]] = []
+        group_start = plan.nominal_start
+        for group_length in _group_lengths(plan.meter, plan.grouping):
+            group_end = group_start + group_length
+            if group_end > plan.start:
+                group_spans.append((max(group_start, plan.start) - plan.start, group_end - plan.start))
+            group_start = group_end
         for voice_id in (1, 2):
             voice = stream.Voice(id=str(voice_id))
             groups: dict[Fraction, list[DrumHit]] = defaultdict(list)
-            for event in by_measure.get(bar_index, []):
+            for event in by_measure.get(measure_index, []):
                 if INSTRUMENTS[event.hit.instrument].voice == voice_id:
-                    groups[event.quarter - measure_start].append(event.hit)
-            if not groups:
-                if measure_length == bar_length:
-                    rest = note.Rest(quarterLength=bar_length)
-                    rest.fullMeasure = True
-                    voice.insert(0, rest)
-                else:
-                    beat_start = Fraction(0)
-                    while beat_start < measure_length:
-                        beat_end = min(beat_start + beat_length, measure_length)
-                        _append_rests(voice, beat_start, beat_end, triplets, alignment_origin=beat_start)
-                        beat_start = beat_end
+                    groups[event.quarter - plan.start].append(event.hit)
+            if not groups and measure_length == bar_length:
+                rest = note.Rest(quarterLength=bar_length)
+                rest.fullMeasure = True
+                voice.insert(0, rest)
             else:
-                beat_start = Fraction(0)
-                while beat_start < measure_length:
-                    beat_end = min(beat_start + beat_length, measure_length)
+                for beat_start, beat_end in group_spans:
                     positions = sorted(p for p in groups if beat_start <= p < beat_end)
                     cursor = beat_start
                     for index, position in enumerate(positions):
@@ -375,17 +617,16 @@ def _build_score(
                         voice.insert(position, element)
                         cursor = position + length
                     _append_rests(voice, cursor, beat_end, triplets, alignment_origin=beat_start)
-                    beat_start = beat_end
             stream.makeNotation.makeTupletBrackets(voice, inPlace=True)
             measure.insert(0, voice)
-        if bar_index == final_bar_index - 1:
+        if measure_index == len(plans) - 1:
             measure.rightBarline = bar.Barline("final")
         part.append(measure)
     # Beaming and tuplet brackets follow the declared meter; no hand-built beam
     # counts are inferred from how many onset events happen to be present.
     part.makeBeams(inPlace=True)
     score.insert(0, part)
-    return score, bar_count, note_sources
+    return score, len(plans), note_sources
 
 
 def _fix_percussion_xml(path: Path, note_sources: dict[str, DrumHit]) -> None:
@@ -454,6 +695,11 @@ def _fix_percussion_xml(path: Path, note_sources: dict[str, DrumHit]) -> None:
                 insert_at = next((i for i, child in enumerate(xml_note) if child.tag in {"beam", "notations"}), len(xml_note))
                 xml_note.insert(insert_at, head)
             head.set("parentheses", "yes")
+    # music21 exports the playback tempo but does not preserve its style's
+    # hideObjectOnPrint flag. MusicXML's explicit metronome attribute does.
+    for metronome in root.findall("./part/measure/direction/direction-type/metronome"):
+        if metronome.get("id", "").startswith("dt-tempo-hidden-"):
+            metronome.set("print-object", "no")
     ET.indent(tree, space="  ")
     tree.write(path, encoding="utf-8", xml_declaration=True)
 
@@ -512,7 +758,9 @@ def export_score(
     ):
         raise ValueError("Detected rhythm grid does not match the resolved score settings.")
     events, warnings, metrics = _quantize(transcription, options, rhythm)
-    origin = _score_origin(options, events)
+    plans = _measure_plan(transcription, options, events, rhythm)
+    origin = plans[0].start
+    tempos = _tempo_points(options, rhythm, origin, plans[-1].end)
     bar_length, _ = _meter_lengths(options)
     first_bar_index = int(origin // bar_length)
     pickup_length = (first_bar_index + 1) * bar_length - origin if origin != first_bar_index * bar_length else Fraction(0)
@@ -526,7 +774,7 @@ def export_score(
     xml_path = output_dir / "score.musicxml"
     preview_path = output_dir / "preview.wav"
     _write_midi(raw_midi, [(hit.time_seconds, hit) for hit in transcription.hits], options)
-    _write_midi(score_midi, [(float(event.quarter - origin) * 60 / options.bpm, event.hit) for event in events], options)
+    _write_score_midi(score_midi, events, options, rhythm, plans, tempos)
     score, bar_count, note_sources = _build_score(transcription, options, events, rhythm)
     score.write("musicxml", fp=xml_path)
     _fix_percussion_xml(xml_path, note_sources)
@@ -550,13 +798,30 @@ def export_score(
     warnings.append("Preview audio uses synthesized percussion at original hit times; it is not a separated drum recording.")
     if rhythm is not None:
         warnings.append(
-            "The sheet follows detected beat positions. Score MIDI uses the displayed nominal "
-            "constant BPM; raw MIDI and preview audio retain the original performance timing."
+            "The sheet and score MIDI follow the local beat, meter and tempo map. "
+            "Small tempo fluctuations are hidden in MusicXML playback; only sustained "
+            "changes receive visible tempo labels. Review inferred meter and groupings."
         )
+    meter_changes: list[dict[str, Any]] = []
+    previous_meter: tuple[str, tuple[int, ...]] | None = None
+    for plan in plans:
+        current_meter = (plan.meter, plan.grouping)
+        if current_meter != previous_meter:
+            meter_changes.append({"quarter": float(plan.start), "meter": plan.meter, "grouping": list(plan.grouping)})
+            previous_meter = current_meter
+    visible_tempos = [{"quarter": point.quarter, "bpm": point.display_bpm} for point in tempos if point.display_bpm is not None]
+    bpm_values = [60_000_000 / point.microseconds for point in tempos]
     metrics.update({
         "bars": bar_count,
         "bpm_source": rhythm.engine if rhythm is not None else "user",
-        "tempo_mode": "detected_beat_grid_nominal_playback" if rhythm is not None else "constant",
+        "tempo_mode": "detected_tempo_map" if rhythm is not None else "constant",
+        "bpm_initial": visible_tempos[0]["bpm"],
+        "bpm_min": round(min(bpm_values), 2),
+        "bpm_max": round(max(bpm_values), 2),
+        "tempo_change_count": len(visible_tempos) - 1,
+        "tempo_changes": visible_tempos,
+        "meter_change_count": len(meter_changes) - 1,
+        "meter_changes": meter_changes,
         "first_downbeat_seconds": options.first_downbeat_seconds,
         "score_origin_quarter": float(origin),
         "pickup_quarters": float(pickup_length),
