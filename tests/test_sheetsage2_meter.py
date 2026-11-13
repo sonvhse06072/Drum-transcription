@@ -120,8 +120,8 @@ def test_local_api_can_select_meter_head_without_loading_default_tracker(tmp_pat
     import io
     import time
 
-    import soundfile as sf
     import numpy as np
+    import soundfile as sf
     from fastapi.testclient import TestClient
 
     from drum_transcription.app import create_app
